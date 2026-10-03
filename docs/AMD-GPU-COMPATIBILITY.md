@@ -132,6 +132,33 @@ Mostly the same as for discrete AMD GPUs, plus:
   root or video group) wakes them up. Some hosts need this on
   every boot; persist via a systemd unit or udev rule.
 
+### Required env var for GPU attention: `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`
+
+**Without this env var, ComfyUI runs attention on CPU, not GPU.**
+PyTorch's `scaled_dot_product_attention` on ROCm has three backends:
+- **math** — pure CPU reference implementation
+- **flash** — AOTriton-based flash attention
+- **efficient** — AOTriton-based memory-efficient attention
+
+Without `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`, the flash and
+efficient backends are marked "runtime disabled" and torch falls
+back to math. Symptoms: matmul/conv shows GPU activity in
+`rocm-smi`, but `amdgpu_top` shows GTT in use (model weights in
+GPU-mapped memory) with ~0% GFX activity. The CPU pegs at 100%
+during sampling and the system feels laggy.
+
+With the env var, both GPU backends work. Measured on the Ryzen
+AI 7 350 (Radeon 860M) at batch 1, seq 256, head 16, dim 64:
+
+| Backend | 50 SDPA iterations |
+|---------|--------------------|
+| math (CPU) | 69 ms |
+| efficient (GPU, AOTriton) | 5 ms |
+| flash (GPU, AOTriton) | 5 ms |
+
+~14x speedup. The `compose.yaml` in this repo sets this env var
+by default. Keep it.
+
 ### gfx-version override (required for some APUs)
 
 The rocm/pytorch base image's torch wheel is compiled for the

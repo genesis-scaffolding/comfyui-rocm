@@ -119,6 +119,17 @@ This is the same gotcha the comfyui-cuda repo's AGENTS.md calls out.
   Python + PyTorch stack. See <https://hub.docker.com/r/rocm/pytorch/tags>
   for the full list.
 
+## Performance gotcha: AOTriton env var
+
+`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` must be set in the
+container environment, or PyTorch's `scaled_dot_product_attention`
+falls back to the math backend (CPU) and ComfyUI hammers the CPU
+at 100% while the GPU sits idle. With it, attention runs on the
+GPU via AOTriton (~14x speedup on RDNA 3.5; similar on RDNA 4).
+The `compose.yaml` sets this by default — do not remove it.
+Same env var is needed for any PyTorch SDPA workload on AMD
+ROCm, not just ComfyUI.
+
 ## venv strategy (and how it differs from comfyui-cuda)
 
 The CUDA repo's base (`nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04`)
