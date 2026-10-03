@@ -42,3 +42,10 @@ matrix-nio
 #
 # If the extension needs extra packages not in its requirements.txt, add them
 # on the lines immediately after the -r line.
+
+# comfyui-impact-pack
+# https://github.com/ltdrdata/ComfyUI-Impact-Pack
+# Detector/detailer nodes (face, SAM, YOLO, etc.). Common prerequisite
+# for video and face workflows. ~10 packages; adds ~100 MB to the
+# image. Cloned in extensions.sh.
+-r "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Impact-Pack/Main/requirements.txt"
