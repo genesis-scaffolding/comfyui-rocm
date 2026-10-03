@@ -1,9 +1,12 @@
 # AMD GPU & ROCm Compatibility
 
-This image targets AMD GPUs supported by ROCm 7.2.4 with PyTorch 2.9.1
-multi-arch wheels. The base image is
-[`rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`](https://hub.docker.com/r/rocm/pytorch/tags);
-its built-in torch supports the gfx targets listed below.
+This image targets AMD GPUs supported by ROCm 7.2.4 with PyTorch 2.11.0
+(`+rocm7.2`) wheels. The system ROCm is installed from
+[`rocm/dev-ubuntu-24.04:7.2.4`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags);
+PyTorch is installed at build time from the
+[official PyTorch rocm7.2 wheel index](https://download.pytorch.org/whl/rocm7.2/)
+into the venv at `/opt/comfyui/python/venv`. The torch wheel's compiled-in
+gfx targets are listed below.
 
 ## Finding your GPU's gfx code
 
@@ -47,12 +50,13 @@ the base image was built with — verify inside the container with:
 
 ```bash
 docker exec -it <container> \
-    /opt/venv/bin/python -c "import torch; print(torch.cuda.get_arch_list())"
+    /opt/comfyui/python/venv/bin/python -c "import torch; print(torch.cuda.get_arch_list())"
 ```
 
-Expected output (for the 7.2.4 base): `gfx908`, `gfx90a`, `gfx942`,
-`gfx950`, `gfx1030`, `gfx1100`, `gfx1101`, `gfx1102`, `gfx1150`,
-`gfx1151`, `gfx1200`, `gfx1201` (exact list may vary slightly per
+Expected output (for the rocm7.2 torch 2.11.0 wheel):
+`['gfx900', 'gfx906', 'gfx908', 'gfx90a', 'gfx942', 'gfx1030',
+'gfx1100', 'gfx1101', 'gfx1102', 'gfx1200', 'gfx1201', 'gfx950',
+'gfx1150', 'gfx1151']` (the exact list may vary slightly per
 release).
 
 ## APU / Ryzen AI iGPU section
@@ -66,8 +70,8 @@ characteristics.
 
 The Linux `amdgpu` kernel driver exposes the APU's iGPU to ROCm
 through the same KFD interface as discrete GPUs. Once the iGPU is
-in a usable power state, the rocm/pytorch base image's pre-built
-torch detects it as a HIP device.
+in a usable power state, the torch we install from the rocm7.2
+wheel index detects it as a HIP device.
 
 **No special image is needed** — the same `comfyui-rocm` image
 works for iGPUs and discrete GPUs. The host prerequisites are
@@ -161,13 +165,13 @@ by default. Keep it.
 
 ### gfx-version override (required for some APUs)
 
-The rocm/pytorch base image's torch wheel is compiled for the
-gfx targets `gfx1150` and `gfx1151` (RDNA 3.5 Strix Point / Strix
-Halo), but **not** `gfx1152` (Krackan Point / Ryzen AI 7 350).
-On gfx1152 silicon (e.g. Ryzen AI 7 350 with Radeon 860M), the
-HIP runtime picks gfx1151 as the closest match but the silicon
-differs subtly and the first GPU operation segfaults (Python exits
-139, container dies).
+The rocm7.2 torch wheel is compiled for the gfx targets
+`gfx1150` and `gfx1151` (RDNA 3.5 Strix Point / Strix Halo),
+but **not** `gfx1152` (Krackan Point / Ryzen AI 7 350). On
+gfx1152 silicon (e.g. Ryzen AI 7 350 with Radeon 860M), the HIP
+runtime picks gfx1151 as the closest match but the silicon differs
+subtly and the first GPU operation segfaults (Python exits 139,
+container dies).
 
 **Fix:** set `HSA_OVERRIDE_GFX_VERSION=11.5.1` in the container
 environment. This forces the runtime to treat the device as
@@ -243,7 +247,7 @@ docker exec -it <container> bash
 rocm-smi
 # Expect: GPU table with your host's GPUs
 
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+/opt/comfyui/python/venv/bin/python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 # Expect: True '<your GPU name>'
 ```
 

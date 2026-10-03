@@ -2,59 +2,72 @@
 #
 # ComfyUI + ROCm runtime image.
 #
+# Mirrors comfyui-cuda/Dockerfile by design: thin base + we own the
+# venv at /opt/comfyui/python/venv (inside the bind mount) so user
+# `pip install`s persist across container recreates. The previous
+# revision of this Dockerfile used rocm/pytorch as the base, which
+# ships a pre-built venv at /opt/venv INSIDE THE IMAGE. That venv
+# disappears with every `docker compose up --force-recreate`, so any
+# `pip install` the user ran was lost. The cuda image has never had
+# this problem because the cuda base has no venv — we create ours.
+#
 # Build args (set by docker-bake.hcl or the CLI):
-#   COMFYUI_VERSION  — upstream tag (bare, e.g. 0.34.0; the Dockerfile
-#                      prepends 'v' where the full tag is needed)
+#   COMFYUI_VERSION  — upstream tag (bare, e.g. 0.34.0)
 #   UV_VERSION       — version of the uv binary to copy in
-#   ROCM_BASE_TAG    — tag of the rocm/pytorch image to FROM. Encodes
-#                      the ROCm version, Ubuntu version, Python version,
-#                      and PyTorch version (e.g.
-#                      rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1).
-#                      The base image ships /opt/venv with torch+rocm
-#                      matched and validated, so we don't reinstall torch.
+#   PYTHON_VERSION   — Python version for the venv (uv installs it;
+#                      the rocm base has no Python)
+#   ROCM_VERSION     — ROCm version (e.g. 7.2.4)
+#   UBUNTU_VERSION   — Ubuntu version (e.g. 24.04; informational)
 #
 # All ARG defaults are declared before any FROM. BuildKit does not
 # consistently apply global-scope ARG defaults to a FROM declared
 # later in the file, so all build-args live up here.
 
 ARG UV_VERSION="0.12.5"
-ARG ROCM_BASE_TAG="rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1"
+ARG PYTHON_VERSION="3.13"
+ARG ROCM_VERSION="7.2.4"
+ARG UBUNTU_VERSION="24.04"
 ARG COMFYUI_VERSION
 
 # Stage 1: pull the uv binary into a tiny side-image so we can COPY it
 # into the main image without needing pip there.
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-# Stage 2: the real image. AMD's official rocm/pytorch base ships:
-#   - ROCm runtime + userspace at /opt/rocm
-#   - A pre-built Python venv at /opt/venv with PyTorch matched to
-#     the ROCm version (multi-arch wheels, includes gfx1201 for
-#     RDNA 4 / R9700)
-#   - The /opt/venv/bin path is already on PATH
-# We layer on top: the entrypoint, our user, ComfyUI itself, and any
-# extension requirements. We do NOT reinstall torch.
-FROM rocm/pytorch:${ROCM_BASE_TAG}
+# Stage 2: the real image. AMD's rocm/dev-ubuntu-24.04 ships:
+#   - ROCm 7.2.4 runtime + dev tools at /opt/rocm
+#   - An `ubuntu` user at UID/GID 1000 in the `video` group (matches
+#     the nvidia/cuda base for parallel Dockerfile flow)
+#   - No Python, no PyTorch — we install those into our own venv
+#
+# This is the closest analog to nvidia/cuda:13.0.3-cudnn-runtime-
+# ubuntu24.04 in the cuda image. We layer on top: system packages,
+# the entrypoint, our user rename, ComfyUI itself, and the venv.
+FROM rocm/dev-ubuntu-24.04:${ROCM_VERSION}
 
 # BuildKit's "global" ARG scope (above any FROM) only flows into FROM
 # lines. Inside a stage, ARGs only persist if redeclared after the
-# FROM. COMFYUI_VERSION is used in the requirements.in sed and the
-# git clone below, so it must be re-declared here.
+# FROM. COMFYUI_VERSION is used in the git clone RUN below, so it
+# must be re-declared here.
 ARG COMFYUI_VERSION
 ENV COMFYUI_HOME="/opt/comfyui"
 
-# OS-level packages needed by ComfyUI runtime + the entrypoint. The
-# rocm/pytorch base already has most of what we need; this layer only
-# adds the small set it doesn't ship.
+# ROCm paths. The base image already has /opt/rocm/bin on PATH, but
+# we re-declare explicitly so the Docker layer doesn't depend on
+# AMD's choices. LD_LIBRARY_PATH is set in the running container by
+# /etc/ld.so.conf.d/rocm*.conf from the base image — leaving it
+# alone here.
+ENV PATH="/opt/rocm/bin:/opt/rocm/llvm/bin:${PATH}"
+
+# OS-level packages needed by ComfyUI runtime + a few utilities used
+# by the entrypoint and Manager. Same list as the cuda image.
 #
-# gcc + libc6-dev: required by Triton (PyTorch's JIT compiler, also
-# used by comfy-aimdo and several other backends) to compile GPU
-# kernels at import time. Without these, the first model load that
-# triggers a JIT-compile fails with "Failed to find C compiler".
-# ~90 MB combined; much smaller than clang.
+# gcc + libc6-dev: required by Triton (PyTorch's JIT compiler) to
+# compile GPU kernels at import time. Without these, the first model
+# load that triggers a JIT-compile fails with "Failed to find C
+# compiler". ~90 MB combined; much smaller than clang.
 #
-# gosu: UID/GID drop in entrypoint.sh.
-#
-# curl: HEALTHCHECK command.
+# The rocm base already ships libgl1, libnuma1, and rocm-dev. We do
+# NOT need to install rocm.
 #
 # hadolint ignore=DL3008
 RUN --mount=type=cache,target=/var/cache/apt \
@@ -69,39 +82,18 @@ RUN --mount=type=cache,target=/var/cache/apt \
         git \
         gosu \
         libc6-dev \
-        libgl1 \
         libglib2.0-0
 
-COPY --from=uv /uv /uvx /usr/local/bin/
-
-# Rename the default `ubuntu` user (UID/GID 1000) to `comfyui` and
-# set the home directory to ${COMFYUI_HOME}. The rocm/pytorch base
-# ships an `ubuntu` user with UID/GID 1000, the same as the
+# Rename the default `ubuntu` user to `comfyui`. The rocm/dev-ubuntu
+# base ships an `ubuntu` user with UID/GID 1000, the same as the
 # nvidia/cuda base. The entrypoint only has to handle UID/GID
 # changes from here.
-#
-# /opt/venv in the base is root-owned. We need comfyui to be able
-# to write there at build time (for the `uv pip install` below) and
-# at runtime (the entrypoint runs `uv pip install -r requirements.in`
-# on every container start to layer in extension deps).
-#
-# IMPORTANT: do NOT `chown -R` the venv. Docker's overlay driver
-# copies file data into the new layer when an existing file's
-# owner changes — so `chown -R` on a 4.8 GB venv produces a 4.8 GB
-# layer. chown the *directory entries* (no -R) so the dir inodes
-# are owned by comfyui but the existing files stay on the base
-# layer. New files created under those dirs at build/runtime are
-# owned by comfyui, which is what we need.
 RUN set -ex \
     && groupmod -n comfyui ubuntu \
     && usermod -l comfyui -m -d "${COMFYUI_HOME}" ubuntu \
-    && chown -R comfyui:comfyui "${COMFYUI_HOME}" \
-    && chown comfyui:comfyui \
-        /opt/venv \
-        /opt/venv/bin \
-        /opt/venv/lib \
-        /opt/venv/lib/python3.12 \
-        /opt/venv/lib/python3.12/site-packages
+    && chown -R comfyui:comfyui "${COMFYUI_HOME}"
+
+COPY --from=uv /uv /uvx /usr/local/bin/
 
 WORKDIR ${COMFYUI_HOME}
 
@@ -115,29 +107,36 @@ COPY --chown=comfyui:comfyui ./patches ./patches
 
 # requirements.in references ${COMFYUI_VERSION} so we can pin the
 # upstream ComfyUI requirements URL. uv reads the file verbatim, so
-# the placeholder must be substituted before uv sees it.
+# the placeholder must be substituted before uv sees it. The entrypoint
+# also re-runs `uv pip install` at container start, and benefits from
+# this template being already filled in.
 ARG COMFYUI_VERSION
 RUN sed -i "s|\${COMFYUI_VERSION}|${COMFYUI_VERSION}|g" requirements.in
 
-# Clone ComfyUI at the pinned upstream tag, then install Python deps
-# into the base's /opt/venv (which already has torch+rocm pre-validated
-# for this ROCm version — we don't reinstall it). The entrypoint
-# re-runs `uv pip install` at container start, and benefits from
-# this template being already filled in.
+# Clone ComfyUI at the pinned version, then install Python deps as
+# the comfyui user. The venv lives at /opt/comfyui/python/venv — a
+# path INSIDE THE BIND MOUNT, so user `pip install`s done after the
+# container is running persist across `docker compose up
+# --force-recreate` (this is the bug the previous rocm/pytorch base
+# design had; see the file header).
 #
 # COMFYUI_VERSION is the bare version (e.g. 0.34.0); the 'v' prefix
 # is added here for git's tag format.
 #
 # hadolint ignore=DL3003
 ARG COMFYUI_VERSION
+ARG PYTHON_VERSION
 RUN set -ex \
     && git clone --depth 1 --branch "v${COMFYUI_VERSION}" \
         https://github.com/Comfy-Org/ComfyUI.git app/ \
     && chown -R comfyui:comfyui . \
     && gosu comfyui bash -c "\
-        uv pip install --python /opt/venv/bin/python --compile-bytecode \
-            -r ${COMFYUI_HOME}/requirements.in && \
-        uv cache clean \
+        export VIRTUAL_ENV='${COMFYUI_HOME}/python/venv' \
+        && export UV_CACHE_DIR='${COMFYUI_HOME}/python/cache' \
+        && uv python install '${PYTHON_VERSION}' \
+        && uv venv --python '${PYTHON_VERSION}' --allow-existing \"\${VIRTUAL_ENV}\" \
+        && uv pip install --compile-bytecode -r requirements.in \
+        && uv cache clean \
     "
 
 EXPOSE 8188

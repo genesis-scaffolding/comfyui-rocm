@@ -1,15 +1,41 @@
 # Pinned Python dependencies for the ComfyUI image.
 #
-# Resolved at runtime by `uv pip install --python /opt/venv/bin/python
-# -r requirements.in`. We do NOT pin torch here — the rocm/pytorch
-# base image ships a pre-validated torch+rocm combo (multi-arch wheels,
-# including gfx1201 for RDNA 4 / R9700). Reinstalling torch would
-# either pull a non-matching wheel or fail to find one.
-#
-# We do not commit a pylock.toml because the matrix version (ComfyUI)
-# changes often; regenerating the lock at build time is slower but
-# always matches the upstream tag. Switch to a committed pylock.toml
-# if reproducibility becomes a concern.
+# Resolved at build time by `uv pip install -r requirements.in`. We do
+# not commit a pylock.toml because the matrix version (ComfyUI) changes
+# often; regenerating the lock at build time is slower but always matches
+# the upstream tag. Switch to a committed pylock.toml if reproducibility
+# becomes a concern.
+
+#===============================================================================
+# CORE (PyTorch + ROCm wheels)
+#===============================================================================
+
+# Wheels index for PyTorch's ROCm 7.2 build. 7.2 wheels are the
+# version-matched set for a system running ROCm 7.2.x (the lowest
+# supported version is encoded in the wheel's tag, and a newer system
+# ROCm is forward-compatible). The build host runs ROCm 7.2.4 from the
+# rocm/dev-ubuntu-24.04:7.2.4 base image.
+--extra-index-url "https://download.pytorch.org/whl/rocm7.2"
+
+# PyTorch. Versions must match a published rocm7.2 wheel. If the
+# upstream ComfyUI release needs a different torch, update these pins
+# and the ROCM_VERSION in metadata.env + docker-bake.hcl together.
+# 2.11.0 is the oldest rocm7.2 wheel; 2.12/2.13/2.14 are also
+# available (newer is fine, but we pin to 2.11.0 to stay close to
+# the 2.9.1 build that rocm/pytorch:7.2.4 used in the previous
+# revision of this image, since R9700 / gfx1201 was verified working
+# with that base).
+# https://download.pytorch.org/whl/rocm7.2/torch/
+torch==2.11.0+rocm7.2
+# https://download.pytorch.org/whl/rocm7.2/torchvision/
+torchvision==0.26.0+rocm7.2
+# https://download.pytorch.org/whl/rocm7.2/torchaudio/
+torchaudio==2.11.0+rocm7.2
+
+# Note: xformers is intentionally omitted. PyTorch's ROCm wheels do
+# not bundle xformers, and ComfyUI falls back to SDPA attention,
+# which is competitive on modern hardware. If a user specifically
+# needs xformers, they can install it via Manager after the fact.
 
 #===============================================================================
 # COMFYUI

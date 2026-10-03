@@ -12,7 +12,8 @@ genesis-scaffolding/comfyui-rocm/
 ├── docs/
 │   ├── QUICKSTART.md              # End-user: how to pull and run the image
 │   ├── AMD-GPU-COMPATIBILITY.md   # Supported AMD GPU matrix
-│   └── REPOSITORY-STRUCTURE.md    # This file
+│   ├── REPOSITORY-STRUCTURE.md    # This file
+│   └── CUSTOM_NODES.md            # How to add custom nodes to the image
 │
 ├── scripts/
 │   ├── check-releases.sh          # Compare upstream vs our latest tag
@@ -21,11 +22,11 @@ genesis-scaffolding/comfyui-rocm/
 ├── patches/                       # Local extension patches
 │   └── README.md                  # How patches/ works
 │
-├── Dockerfile                     # Multi-stage: uv + rocm/pytorch
+├── Dockerfile                     # Multi-stage: uv + rocm/dev-ubuntu-24.04
 ├── docker-bake.hcl                # Build target for `docker buildx bake`
 ├── entrypoint.sh                  # Container entrypoint
 ├── extensions.sh                  # Pre-installed custom nodes
-├── requirements.in                # Python deps (ComfyUI non-torch + extensions)
+├── requirements.in                # Python deps (torch +rocm7.2 + ComfyUI + extensions)
 ├── compose.yaml                   # User-facing compose
 ├── compose.dev.yaml               # Local-dev override (named volumes)
 ├── metadata.env                   # Pinned versions for local builds
@@ -71,17 +72,20 @@ The CI itself. Three jobs:
 Multi-stage:
 
 - Stage 1: pulls the `uv` binary from `ghcr.io/astral-sh/uv`.
-- Stage 2: the main image. Based on
-  `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`.
+- Stage 2: the main image. Based on `rocm/dev-ubuntu-24.04:7.2.4`
+  (Ubuntu 24.04 + ROCm 7.2.4 runtime, no Python, no PyTorch).
   Installs OS packages (gosu, curl, gcc, ffmpeg, ...), creates the
   `comfyui` user, copies build inputs, clones ComfyUI at the pinned
-  tag, and installs Python deps into the base's pre-built
-  `/opt/venv`.
+  tag, and installs Python deps (including `+rocm7.2` torch wheels)
+  into a venv at `/opt/comfyui/python/venv` that lives inside the
+  bind mount.
 
 Build args:
 
 - `COMFYUI_VERSION` — required. The upstream tag to clone.
-- `ROCM_BASE_TAG` — defaults to `rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`.
+- `ROCM_VERSION` — defaults to `7.2.4` (matches the
+  `rocm/dev-ubuntu-24.04` tag).
+- `PYTHON_VERSION` — defaults to `3.13` (uv installs it).
 - `UV_VERSION` — defaults to `0.12.5`.
 
 #### `docker-bake.hcl`
@@ -96,13 +100,12 @@ set (the workflow passes it; local builds source it from
 Container entrypoint. Runs as root initially, then drops to
 `comfyui` via `gosu` (with `PUID`/`PGID` adjustment). Sources
 `extensions.sh` to sync custom nodes, refreshes Python deps against
-`requirements.in` (into `/opt/venv`, the base image's pre-built
-venv), then starts ComfyUI.
+`requirements.in` (into the bind-mounted venv at
+`/opt/comfyui/python/venv`), then starts ComfyUI.
 
-The only material divergence from the comfyui-cuda repo's entrypoint
-is that we use `--python /opt/venv/bin/python` to install into the
-existing base venv rather than creating our own venv at
-`/opt/comfyui/python/venv`.
+Bakes `--disable-pinned-memory` into the ComfyUI defaults to save
+~15 GB of system RAM (see the comment in the file). This is the
+only material divergence from the comfyui-cuda repo's entrypoint.
 
 #### `extensions.sh`
 
@@ -112,11 +115,11 @@ new extensions via `install_extension <slug> <git-url>`.
 
 #### `requirements.in`
 
-Python dependencies. Does **not** include torch — the base image
-already provides a matched torch+rocm combo. Lists:
+Python dependencies. Includes:
 
-- ComfyUI's non-torch requirements (fetched from the pinned upstream
-  tag)
+- torch / torchvision / torchaudio `+rocm7.2` wheels from
+  `https://download.pytorch.org/whl/rocm7.2/`
+- ComfyUI's requirements (fetched from the pinned upstream tag)
 - ComfyUI-Manager requirements (fetched from upstream)
 - Per-extension requirements (under `# CUSTOM NODES`)
 
@@ -140,6 +143,8 @@ ROCm-specific bits:
 - `group_add: [video]`
 - `HIP_VISIBLE_DEVICES=0` env
 - `CUDA_VISIBLE_DEVICES=""` env
+- `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` env (see `AGENTS.md`
+  for why this is mandatory)
 
 #### `compose.dev.yaml`
 
@@ -160,7 +165,7 @@ for sanity-checking before triggering the CI manually.
 #### `scripts/test-build.sh`
 
 Build the image locally for the host's architecture, tagged as
-`comfyui-rocm:test-<version>-rocm-<rocm>-amd64`. Runs the same
+`comfyui-rocm:test-v<version>-rocm-<rocm>-amd64`. Runs the same
 Dockerfile the CI runs.
 
 ### Docs
@@ -172,9 +177,14 @@ install models, install extensions via Manager.
 
 #### `docs/AMD-GPU-COMPATIBILITY.md`
 
-Reference for ROCm 7.2 / PyTorch 2.9.1 supported hardware. Covers
+Reference for ROCm 7.2 / PyTorch 2.11.0 supported hardware. Covers
 RDNA 4 (R9700, RX 9070), RDNA 3 (RX 7000), and Instinct MI300X /
 MI325X / MI355X.
+
+#### `docs/CUSTOM_NODES.md`
+
+How to add a custom node to the image (the two-step pattern:
+`extensions.sh` clone + `requirements.in` deps).
 
 #### `docs/REPOSITORY-STRUCTURE.md`
 
@@ -200,7 +210,7 @@ schedule (cron: 0 0 * * *)  or  workflow_dispatch
         │   - maximize space   │   native runner
         │   - docker buildx    │
         │     bake             │
-        │   - push to GHCR     │   ~25-40 min per cell (large base)
+        │   - push to GHCR     │   ~10 min warm, ~25 min cold
         └──────────┬───────────┘
                    │ needs.build == 'success'
                    ▼
@@ -217,17 +227,17 @@ schedule (cron: 0 0 * * *)  or  workflow_dispatch
 ### Add a new ROCm version
 
 1. Edit `.github/workflows/build.yml` — add to the `matrix.include`
-   list with a new `rocm_base_tag` and `rocm_version_short`.
-2. Edit `metadata.env` — update `ROCM_BASE_TAG` for local builds.
+   list with a new `rocm_version` and `rocm_version_short`.
+2. Edit `metadata.env` — update `ROCM_VERSION` for local builds.
 3. Edit `docs/AMD-GPU-COMPATIBILITY.md` — add the new version's GPU
    support notes.
 
 ### Add a new host architecture
 
 1. Edit `.github/workflows/build.yml` — add to the `matrix.include`
-   list with a suitable `runs_on` runner. Note: the `rocm/pytorch`
-   base is amd64-only, so this requires a different base image.
-2. Update the README and QUICKSTART tables.
+   list with a suitable `runs_on` runner. Note: the
+   `rocm/dev-ubuntu-24.04` base is amd64-only, so this requires a
+   different base image.
 
 ### Pre-install a new custom node
 
@@ -239,10 +249,10 @@ schedule (cron: 0 0 * * *)  or  workflow_dispatch
    `patches/<slug>/<NNN>-<desc>.patch`.
 4. Open a PR. The CI rebuilds on merge.
 
-### Bump torch / Python / Ubuntu
+### Bump torch / ROCm
 
-All three are encoded in `ROCM_BASE_TAG`. Pick a new tag from
-<https://hub.docker.com/r/rocm/pytorch/tags> that supports gfx1201
-(R9700) and update the single variable. Bumping is one-line; the
-resulting image will track AMD's validated combo for the new
-versions.
+- **ROCm**: bump `ROCM_VERSION` in `metadata.env` and the workflow
+  matrix; pick a `rocm/dev-ubuntu-24.04:<version>` tag.
+- **torch**: bump the `+rocm7.2` wheel versions in
+  `requirements.in`. Available torch versions on the rocm7.2 index
+  are at <https://download.pytorch.org/whl/rocm7.2/torch/>.

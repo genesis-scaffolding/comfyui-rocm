@@ -8,7 +8,9 @@ Pre-built Docker images of [ComfyUI](https://github.com/Comfy-Org/ComfyUI) bundl
 
 This project is the AMD ROCm counterpart to [**genesis-scaffolding/comfyui-cuda**](https://github.com/genesis-scaffolding/comfyui-cuda). The two repos share the same design: multi-stage `uv` binary, the same `entrypoint.sh` for UID/GID handling, the same pre-installed Manager extension, the same `requirements.in` for per-extension dependencies, the same CI shape (cron + `workflow_dispatch` → detect → build matrix → release with the empty-commit-on-tag trick), the same compose ergonomics, and the same AGENTS.md / docs/ layout. If you've used the cuda repo, this one will feel identical.
 
-The base image — [`rocm/pytorch`](https://hub.docker.com/r/rocm/pytorch) — is published by AMD and provides a pre-validated ROCm + Python + PyTorch combo. This repo only adds ComfyUI, the `comfyui` user, and the runtime ergonomics on top.
+The base image — [`rocm/dev-ubuntu-24.04`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04) — is published by AMD and provides a pre-validated Ubuntu 24.04 + ROCm runtime. This repo installs Python (via `uv`), PyTorch (from the official rocm7.2 wheel index), and ComfyUI on top. The venv lives at `/opt/comfyui/python/venv` inside the bind mount, so user `pip install`s persist across `docker compose up --force-recreate` — same persistence model as the cuda repo.
+
+The earlier `corundex/ComfyUI-ROCm` (and the AMD-built [`rocm/comfyui`](https://hub.docker.com/r/rocm/comfyui)) image were also consulted for ROCm-specific device mapping conventions (`--device /dev/kfd --device /dev/dri --group-add video`) and compose env vars (`HIP_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES=""`). Thanks to the corundex and AMD authors for paving the way.
 
 The earlier `corundex/ComfyUI-ROCm` (and the AMD-built [`rocm/comfyui`](https://hub.docker.com/r/rocm/comfyui)) image were also consulted for ROCm-specific device mapping conventions (`--device /dev/kfd --device /dev/dri --group-add video`) and compose env vars (`HIP_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES=""`). Thanks to the corundex and AMD authors for paving the way.
 
@@ -52,7 +54,7 @@ The compose file uses a pinned image tag. To follow the latest build, edit `comp
 |------------|----------|---------------|
 | `-amd64` | `linux/amd64` | Most desktops, servers, cloud VMs |
 
-The rocm/pytorch base is amd64-only. ROCm has no stable arm64 support, so this image does not publish an arm64 variant. Same constraint as the AMD-built `rocm/comfyui` image.
+The rocm/dev-ubuntu-24.04 base is amd64-only. ROCm has no stable arm64 support, so this image does not publish an arm64 variant. Same constraint as the AMD-built `rocm/comfyui` image.
 
 ### ROCm / PyTorch version
 
@@ -64,11 +66,12 @@ The matrix starts with a single ROCm version. New versions are added to `.github
 
 ### Image contents
 
-- Base: `rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`
-- Python 3.12 in `/opt/venv` (provided by the base image, no extra venv needed)
-- PyTorch 2.9.1 with ROCm 7.2.4 wheels (multi-arch, includes gfx1201)
+- Base: `rocm/dev-ubuntu-24.04:7.2.4` (Ubuntu 24.04 + ROCm 7.2.4 runtime)
+- Python 3.13 in `/opt/comfyui/python/venv` (installed at build time via `uv`, with the venv inside the bind mount so `pip install`s persist)
+- PyTorch 2.11.0 with ROCm 7.2 wheels from [download.pytorch.org](https://download.pytorch.org/whl/rocm7.2/) (multi-arch, includes gfx1201)
 - ComfyUI at the upstream tagged release
 - [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) (pre-installed as a custom node + the `comfyui_manager` PyPI backend package)
+- `--disable-pinned-memory` baked into the ComfyUI defaults (saves ~15 GB of system RAM staging buffer; on a 32 GB system + 32 GB VRAM R9700, the default pinned buffer would OOM)
 - Runs as unprivileged user `comfyui` (UID/GID configurable via `PUID`/`PGID`)
 
 No additional custom nodes are pre-installed. Use ComfyUI-Manager inside the UI to install them.
@@ -100,15 +103,15 @@ See [`.github/workflows/build.yml`](.github/workflows/build.yml) for the full pi
 Build and smoke-test on the current host:
 
 ```bash
-# Build for the current architecture, tag as comfyui-rocm:test
+# Build for the current architecture, tag as comfyui-rocm:test-v<comfyui>-rocm-<base>-amd64
 ./scripts/test-build.sh
 
 # Smoke-test the entrypoint (no GPU required)
-docker run --rm comfyui-rocm:test --help   # starts ComfyUI, prints usage
+docker run --rm comfyui-rocm:test-v<comfyui>-rocm-<base>-amd64 --help   # starts ComfyUI, prints usage
 
 # Confirm torch + ROCm combo (no GPU required)
-docker run --rm --entrypoint=/opt/venv/bin/python \
-    comfyui-rocm:test \
+docker run --rm --entrypoint=/opt/comfyui/python/venv/bin/python \
+    comfyui-rocm:test-v<comfyui>-rocm-<base>-amd64 \
     -c 'import torch; print(torch.__version__, torch.version.hip)'
 ```
 
@@ -152,7 +155,8 @@ specifics and gotchas.
 
 - **ComfyUI upstream:** https://github.com/Comfy-Org/ComfyUI
 - **ComfyUI CUDA counterpart:** https://github.com/genesis-scaffolding/comfyui-cuda
-- **`rocm/pytorch` base:** https://hub.docker.com/r/rocm/pytorch
+- **`rocm/dev-ubuntu-24.04` base:** https://hub.docker.com/r/rocm/dev-ubuntu-24.04
+- **PyTorch ROCm wheels:** https://download.pytorch.org/whl/rocm7.2/
 - **`rocm/comfyui` (inspiration, AMD-built):** https://hub.docker.com/r/rocm/comfyui
 - **ComfyUI releases:** https://github.com/Comfy-Org/ComfyUI/releases
 - **GHCR package:** https://github.com/orgs/genesis-scaffolding/packages/container/comfyui-rocm

@@ -23,8 +23,11 @@ if [ -z "${COMFYUI_VERSION}" ]; then
     COMFYUI_VERSION=$(grep '^COMFYUI_VERSION=' metadata.env | cut -d= -f2)
 fi
 UV_VERSION=$(grep '^UV_VERSION=' metadata.env | cut -d= -f2)
-ROCM_BASE_TAG=$(grep '^ROCM_BASE_TAG=' metadata.env | cut -d= -f2)
-[ -z "${UV_VERSION}" ] && UV_VERSION="0.12.5"
+PYTHON_VERSION=$(grep '^PYTHON_VERSION=' metadata.env | cut -d= -f2)
+ROCM_VERSION=$(grep '^ROCM_VERSION=' metadata.env | cut -d= -f2)
+[ -z "${UV_VERSION}" ]     && UV_VERSION="0.12.5"
+[ -z "${PYTHON_VERSION}" ] && PYTHON_VERSION="3.13"
+[ -z "${ROCM_VERSION}" ]   && ROCM_VERSION="7.2.4"
 
 # Map current host arch to the matrix suffix.
 case "$(uname -m)" in
@@ -32,8 +35,8 @@ case "$(uname -m)" in
     aarch64) ARCH=arm64 ;;
     *)
         echo "Unsupported host arch: $(uname -m)"
-        echo "The rocm/pytorch base is linux/amd64 only. For cross-arch"
-        echo "builds you'd need a different base; see the docs."
+        echo "The rocm/dev-ubuntu-24.04 base is linux/amd64 only. For"
+        echo "cross-arch builds you'd need a different base; see the docs."
         exit 1
         ;;
 esac
@@ -46,14 +49,15 @@ case "${COMFYUI_VERSION}" in
     v*) COMFYUI_VERSION="${COMFYUI_VERSION#v}" ;;
 esac
 
-# Short form of the ROCm base for the tag (e.g. rocm7.2.4 -> 7.2).
-ROCM_SHORT=$(echo "${ROCM_BASE_TAG}" | sed -E 's/^rocm([0-9]+\.[0-9]+).*/\1/')
+# Short form of the ROCm version for the tag (e.g. 7.2.4 -> 7.2).
+ROCM_SHORT=$(echo "${ROCM_VERSION}" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
 
 TAG="comfyui-rocm:test-v${COMFYUI_VERSION}-rocm-${ROCM_SHORT}-${ARCH}"
 
 echo "=== comfyui-rocm local build ==="
 echo "  ComfyUI:       v${COMFYUI_VERSION}"
-echo "  ROCm base:     ${ROCM_BASE_TAG}"
+echo "  ROCm:          ${ROCM_VERSION}"
+echo "  Python:        ${PYTHON_VERSION}"
 echo "  uv:            ${UV_VERSION}"
 echo "  Arch:          ${ARCH}"
 echo "  Tag:           ${TAG}"
@@ -65,7 +69,8 @@ docker buildx build \
     --platform "linux/${ARCH}" \
     --build-arg "COMFYUI_VERSION=${COMFYUI_VERSION}" \
     --build-arg "UV_VERSION=${UV_VERSION}" \
-    --build-arg "ROCM_BASE_TAG=${ROCM_BASE_TAG}" \
+    --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
+    --build-arg "ROCM_VERSION=${ROCM_VERSION}" \
     --tag "${TAG}" \
     --load \
     .
@@ -78,7 +83,7 @@ echo "Smoke-test the entrypoint (no GPU required):"
 echo "  docker run --rm ${TAG} --help   # starts ComfyUI, prints usage"
 echo
 echo "Confirm torch + ROCm combo (no GPU required):"
-echo "  docker run --rm --entrypoint=/opt/venv/bin/python ${TAG} \\"
+echo "  docker run --rm --entrypoint=/opt/comfyui/python/venv/bin/python ${TAG} \\"
 echo "      -c 'import torch; print(torch.__version__, torch.version.hip)'"
 echo
 echo "Run ComfyUI on a ROCm host (R9700, RX 9070, MI300X, ...):"

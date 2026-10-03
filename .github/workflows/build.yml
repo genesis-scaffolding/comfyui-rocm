@@ -78,10 +78,10 @@ jobs:
           echo "release_version=$VERSION" >> "$GITHUB_OUTPUT"
 
   build:
-    # Single matrix cell: the rocm/pytorch base is linux/amd64 only.
-    # ROCm has no stable arm64 support, so we don't (yet) ship an
-    # arm64 image. If a user shows up with an Ampere Altra + AMD GPU,
-    # add a cell here.
+    # Single matrix cell: the rocm/dev-ubuntu-24.04 base is
+    # linux/amd64 only. ROCm has no stable arm64 support, so we
+    # don't (yet) ship an arm64 image. If a user shows up with an
+    # Ampere Altra + AMD GPU, add a cell here.
     name: Build (amd64, ROCm ${{ matrix.rocm_version_short }})
     needs: check-release
     if: needs.check-release.outputs.should_build == 'true'
@@ -93,16 +93,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - rocm_base_tag: "rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1"
+          - rocm_version: "7.2.4"
             rocm_version_short: "7.2"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Maximize build space
-        # Free runners have ~30 GB. The rocm/pytorch base alone is
-        # ~10 GB, plus torch wheels + ComfyUI deps; this reclaims
-        # space from unused toolchains.
+        # Free runners have ~30 GB. The rocm/dev-ubuntu-24.04 base
+        # is ~5 GB, plus torch wheels (~5 GB), ComfyUI deps, and the
+        # venv — this reclaims space from unused toolchains.
         run: |
           echo "=== Initial ==="
           df -h
@@ -154,6 +154,7 @@ jobs:
           set: |
             *.platform=linux/amd64
             *.args.COMFYUI_VERSION=${{ needs.check-release.outputs.release_version }}
+            *.args.ROCM_VERSION=${{ matrix.rocm_version }}
             *.tags=${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-${{ matrix.rocm_version_short }}-amd64
             *.tags=${{ env.IMAGE }}:latest-rocm-${{ matrix.rocm_version_short }}-amd64
 
@@ -211,7 +212,7 @@ jobs:
             | `${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-7.2-amd64` | `linux/amd64` | 7.2.4 | Radeon RX 9000 (RDNA 4, e.g. R9700), RX 7000 (RDNA 3), Ryzen AI iGPUs (gfx1150/1151/1152, RDNA 3.5), Instinct MI300X/MI325X |
             | `${{ env.IMAGE }}:latest-rocm-7.2-amd64` | `linux/amd64` | 7.2.4 | Rolling latest on amd64 (alias) |
 
-            Built on top of the official [`rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`](https://hub.docker.com/r/rocm/pytorch/tags) base image — ROCm runtime + Python + PyTorch pre-validated for gfx1201 (RDNA 4), gfx1100/1101 (RDNA 3), and Instinct arches.
+            Built on top of [`rocm/dev-ubuntu-24.04:7.2.4`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags) (Ubuntu 24.04 + ROCm 7.2.4 runtime, no Python, no PyTorch) plus [PyTorch +rocm7.2 wheels](https://download.pytorch.org/whl/rocm7.2/) installed into a venv at `/opt/comfyui/python/venv` (which lives INSIDE the bind mount, so user `pip install`s persist across `docker compose up --force-recreate`). The venv design mirrors [comfyui-cuda](https://github.com/genesis-scaffolding/comfyui-cuda).
 
             ## Quick start
 
@@ -261,9 +262,11 @@ jobs:
 
             ## What's inside
 
-            - Base: [`rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`](https://hub.docker.com/r/rocm/pytorch/tags) (ROCm 7.2.4, Python 3.12, PyTorch 2.9.1 in `/opt/venv`)
+            - Base: [`rocm/dev-ubuntu-24.04:7.2.4`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags) (Ubuntu 24.04 + ROCm 7.2.4 runtime)
+            - [PyTorch +rocm7.2 wheels](https://download.pytorch.org/whl/rocm7.2/) (torch / torchvision / torchaudio 2.11.0) installed at build time into a venv at `/opt/comfyui/python/venv`
             - [ComfyUI](https://github.com/Comfy-Org/ComfyUI) at `${{ needs.check-release.outputs.release_tag }}`
             - [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) pre-installed
+            - `--disable-pinned-memory` baked in (saves ~15 GB of system RAM staging buffer — see `entrypoint.sh` for the rocm-specific reason)
             - Runs as unprivileged user `comfyui` (UID/GID via `PUID`/`PGID`)
 
             ## License

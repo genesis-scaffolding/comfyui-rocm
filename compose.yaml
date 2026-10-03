@@ -2,8 +2,8 @@
 # To follow the latest published image, change the tag below to:
 #   ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64
 #
-# The rocm/pytorch base is linux/amd64 only. ROCm has no stable arm64
-# support, so there is no arm64 tag — same as the official
+# The rocm/dev-ubuntu-24.04 base is linux/amd64 only. ROCm has no stable
+# arm64 support, so there is no arm64 tag — same as the official
 # rocm/comfyui image.
 
 services:

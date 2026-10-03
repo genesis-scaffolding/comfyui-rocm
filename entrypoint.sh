@@ -23,10 +23,17 @@ COMFYUI_PATCHES_DIR="${COMFYUI_HOME}/patches"
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 
-# The rocm/pytorch base ships a pre-built /opt/venv with torch+rocm
-# matched. We do NOT create our own venv — extension requirements are
-# installed into the base venv via uv pip install.
-PYTHON_BIN="${PYTHON_BIN:-/opt/venv/bin/python}"
+# uv / venv settings
+#
+# VIRTUAL_ENV is the bind-mounted venv. Anything the user installs
+# with `pip install` after the container starts lands here and
+# persists across `docker compose up --force-recreate` (this is the
+# design bug that motivated the rewrite — the previous rocm/pytorch
+# base shipped a venv at /opt/venv that was INSIDE THE IMAGE and
+# therefore got wiped on every recreate).
+export VIRTUAL_ENV="${COMFYUI_HOME}/python/venv"
+export UV_CACHE_DIR="${COMFYUI_HOME}/python/cache"
+export UV_HTTP_TIMEOUT="60"
 
 _is_sourced() {
     # https://unix.stackexchange.com/a/215279
@@ -193,12 +200,10 @@ function _main() {
         source "${COMFYUI_HOME}/extensions.sh"
     fi
 
-    # Install / refresh extension requirements into the base's /opt/venv.
-    # The base venv already has torch+rocm matched to the runtime —
-    # we only layer in additional deps from requirements.in.
+    # Make sure the venv is current with requirements.in
     log "Refreshing Python environment..."
-    uv pip install --python "${PYTHON_BIN}" --compile-bytecode \
-        -r "${COMFYUI_HOME}/requirements.in"
+    uv venv --allow-existing "${VIRTUAL_ENV}"
+    uv pip install --compile-bytecode -r "${COMFYUI_HOME}/requirements.in"
     uv cache prune
 
     init_manager
@@ -206,9 +211,20 @@ function _main() {
     log "Ready. Starting ComfyUI..."
 
     # Default ComfyUI flags. Disable via COMFYUI_NO_DEFAULTS=true.
+    #
+    # --disable-pinned-memory is rocm-specific and NOT in the cuda
+    # image. ComfyUI's default is to allocate a large host RAM
+    # staging buffer for fast H2D transfers (~15 GB). On a typical
+    # cuda workstation (32 GB system, 16 GB VRAM) that fits; on an
+    # AMD workstation with 32 GB system + 32 GB VRAM (R9700), the
+    # pinned buffer plus OS plus a 15 GB model load leaves almost
+    # no headroom and the system OOMs. Disabling it costs a few % of
+    # H2D throughput but frees the entire staging buffer. The cuda
+    # image keeps the default; the rocm image does not.
     COMFYUI_DEFAULTS=(
         "--listen=0.0.0.0"
         "--disable-auto-launch"
+        "--disable-pinned-memory"
     )
     if [[ -d "${COMFYUI_CUSTOM_NODES_DIR}/comfyui-manager" ]]; then
         COMFYUI_DEFAULTS+=("--enable-manager")
@@ -217,7 +233,7 @@ function _main() {
         COMFYUI_DEFAULTS=()
     fi
 
-    exec "${PYTHON_BIN}" \
+    exec "${VIRTUAL_ENV}/bin/python" \
         "${COMFYUI_APP_DIR}/main.py" \
         "${COMFYUI_DEFAULTS[@]}" "$@"
 }

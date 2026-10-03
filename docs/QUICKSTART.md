@@ -196,10 +196,11 @@ has them; double-check your override.
 ### `torch.cuda.is_available()` is False inside the container
 
 This is the same check as for a CUDA host — it's a torch question,
-not a docker question. The bundled torch (`/opt/venv/bin/python -c
-"import torch; print(torch.__version__, torch.version.hip)"`) should
-report a `+rocm7.2.4` wheel. If it doesn't, the `rocm/pytorch` base
-image's torch install is broken — file an issue.
+not a docker question. The bundled torch
+(`/opt/comfyui/python/venv/bin/python -c "import torch;
+print(torch.__version__, torch.version.hip)"`) should report a
+`+rocm7.2` wheel. If it doesn't, the build's `uv pip install`
+step failed — file an issue.
 
 ### `Could not load the ROCm runtime library`
 
@@ -211,11 +212,12 @@ container. Update both:
 ### `unsupported gfx version: gfxXXXX`
 
 Your GPU's gfx code is not in the bundled torch's compiled-in list.
-The `rocm/pytorch:rocm7.2.4` base supports `gfx908;gfx90a;gfx1030;
-gfx1100;gfx1101;gfx1150;gfx1151;gfx942;gfx1200;gfx1201` (verify
-with `python -c "import torch; print(torch.cuda.get_arch_list())"`
+The torch 2.11.0+rocm7.2 wheel supports `gfx900;gfx906;gfx908;
+gfx90a;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1102;gfx1150;
+gfx1151;gfx1200;gfx1201` (verify with
+`/opt/comfyui/python/venv/bin/python -c "import torch; print(torch.cuda.get_arch_list())"`
 inside the container). If your card isn't in that list, you need a
-different base image — file an issue with the GPU model.
+different torch wheel — file an issue with the GPU model.
 
 ### ComfyUI starts but `http://localhost:8188` doesn't load
 
