@@ -69,11 +69,13 @@ For local development:
 The test box for this project is a Ryzen AI 7 350 workstation
 (Radeon 860M iGPU, gfx1152, RDNA 3.5). It can build, smoke-test,
 AND run end-to-end tests because the rocm/pytorch base has
-gfx1150/1151/1152 in its kernel list and the iGPU's unified
-memory works as VRAM. The same device flags work for both the
-iGPU and discrete AMD GPUs. Performance on the iGPU is
-bandwidth-limited (no dedicated VRAM) but full ComfyUI inference
-runs successfully.
+gfx1150/1151 in its kernel list and the iGPU's unified memory
+works as VRAM. **For gfx1152 silicon (Krackan Point, e.g. Ryzen
+AI 7 350), the container needs `HSA_OVERRIDE_GFX_VERSION=11.5.1`
+or matmul segfaults.** See `docs/AMD-GPU-COMPATIBILITY.md` for
+the workaround. The same device flags work for both the iGPU and
+discrete AMD GPUs. Performance on the iGPU is bandwidth-limited
+(no dedicated VRAM) but full ComfyUI inference runs successfully.
 
 ## Conventions
 

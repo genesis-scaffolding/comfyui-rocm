@@ -132,6 +132,35 @@ Mostly the same as for discrete AMD GPUs, plus:
   root or video group) wakes them up. Some hosts need this on
   every boot; persist via a systemd unit or udev rule.
 
+### gfx-version override (required for some APUs)
+
+The rocm/pytorch base image's torch wheel is compiled for the
+gfx targets `gfx1150` and `gfx1151` (RDNA 3.5 Strix Point / Strix
+Halo), but **not** `gfx1152` (Krackan Point / Ryzen AI 7 350).
+On gfx1152 silicon (e.g. Ryzen AI 7 350 with Radeon 860M), the
+HIP runtime picks gfx1151 as the closest match but the silicon
+differs subtly and the first GPU operation segfaults (Python exits
+139, container dies).
+
+**Fix:** set `HSA_OVERRIDE_GFX_VERSION=11.5.1` in the container
+environment. This forces the runtime to treat the device as
+gfx1151 explicitly, and the existing kernels work.
+
+```bash
+docker run --rm \
+    --device /dev/kfd --device /dev/dri --group-add video \
+    -e HSA_OVERRIDE_GFX_VERSION=11.5.1 \
+    -p 8188:8188 \
+    ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64
+```
+
+**This override is iGPU-specific.** Do not set it on a discrete
+GPU host (R9700, RX 9070, Instinct) — those GPUs use their own
+gfx targets (gfx1201, gfx1200, gfx942) and overriding to 11.5.1
+would force the wrong kernels. The current `compose.yaml` does
+**not** set this var; if you need it for an APU test box, pass it
+in your `docker run` command or a local override compose file.
+
 ### Quick test recipe
 
 ```bash
@@ -139,9 +168,10 @@ Mostly the same as for discrete AMD GPUs, plus:
 rocm-smi
 # Expect: a table with your iGPU, gfx code shown as gfx1150/1151/1152
 
-# 2. Quick container test
+# 2. Quick container test (use the override env var if gfx1152)
 docker run --rm \
     --device /dev/kfd --device /dev/dri --group-add video \
+    -e HSA_OVERRIDE_GFX_VERSION=11.5.1 \
     -p 8188:8188 \
     ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64
 
