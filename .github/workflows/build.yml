@@ -1,0 +1,275 @@
+name: Build ComfyUI with ROCm
+
+# Default to no permissions; each job declares its own.
+permissions: {}
+
+on:
+  schedule:
+    # Daily at 00:00 UTC. Detects new upstream ComfyUI releases.
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force a build even if the latest upstream tag is already built here'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  IMAGE: ghcr.io/genesis-scaffolding/comfyui-rocm
+
+jobs:
+  check-release:
+    name: Detect upstream release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      release_hash: ${{ steps.check.outputs.release_hash }}
+      release_version: ${{ steps.check.outputs.release_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so the tag-existence check below sees prior builds.
+          fetch-depth: 0
+
+      - name: Check upstream ComfyUI release
+        id: check
+        env:
+          FORCE_BUILD: ${{ github.event.inputs.force_build }}
+          # Authenticate the API call to avoid the 60 req/hour
+          # unauthenticated rate limit (GitHub Actions runners share
+          # IPs, so unauthenticated calls can hit 403 under load).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          LATEST=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
+            https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest)
+          TAG=$(echo "$LATEST" | jq -r '.tag_name')
+          SHA=$(echo "$LATEST" | jq -r '.target_commitish')
+          # Bare version (e.g. 0.34.0) without the upstream 'v' prefix.
+          # The Dockerfile prepends 'v' where it needs the full tag
+          # (git clone branch, requirements URL template).
+          VERSION="${TAG#v}"
+
+          echo "Latest upstream ComfyUI release: $TAG (bare: $VERSION)"
+          echo "Target commit: $SHA"
+
+          # Skip if we've already built this exact upstream tag.
+          if git tag --list "$TAG" | grep -q .; then
+            echo "Release $TAG is already built in this repo"
+            if [ "${FORCE_BUILD}" = "true" ]; then
+              echo "force_build=true, rebuilding anyway"
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "New upstream release detected: $TAG"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_hash=$SHA" >> "$GITHUB_OUTPUT"
+          echo "release_version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    # Single matrix cell: the rocm/pytorch base is linux/amd64 only.
+    # ROCm has no stable arm64 support, so we don't (yet) ship an
+    # arm64 image. If a user shows up with an Ampere Altra + AMD GPU,
+    # add a cell here.
+    name: Build (amd64, ROCm ${{ matrix.rocm_version_short }})
+    needs: check-release
+    if: needs.check-release.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rocm_base_tag: "rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1"
+            rocm_version_short: "7.2"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Maximize build space
+        # Free runners have ~30 GB. The rocm/pytorch base alone is
+        # ~10 GB, plus torch wheels + ComfyUI deps; this reclaims
+        # space from unused toolchains.
+        run: |
+          echo "=== Initial ==="
+          df -h
+
+          sudo apt-get remove -y \
+              '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' \
+              '^mongodb-.*' '^mysql-.*' \
+              azure-cli google-chrome-stable firefox powershell \
+              mono-devel libgl1-mesa-dri --fix-missing || true
+          sudo apt-get autoremove -y || true
+          sudo apt-get clean || true
+
+          sudo rm -rf \
+              /usr/share/dotnet \
+              /usr/local/lib/android \
+              /opt/ghc \
+              /opt/hostedtoolcache/CodeQL \
+              /usr/local/share/boost \
+              /usr/share/swift \
+              /usr/local/.ghcup \
+              "$AGENT_TOOLSDIRECTORY"
+
+          docker system prune -af || true
+
+          echo "=== After ==="
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Cross-job cache via GHA.
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/bake-action@v6
+        with:
+          push: true
+          source: .
+          files: |
+            ./docker-bake.hcl
+          targets: build
+          set: |
+            *.platform=linux/amd64
+            *.args.COMFYUI_VERSION=${{ needs.check-release.outputs.release_version }}
+            *.tags=${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-${{ matrix.rocm_version_short }}-amd64
+            *.tags=${{ env.IMAGE }}:latest-rocm-${{ matrix.rocm_version_short }}-amd64
+
+  release:
+    name: Publish GitHub Release
+    needs: [check-release, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history + tags so the advancing-tag trick below can
+          # push a fast-forward.
+          fetch-depth: 0
+
+      - name: Create advancing release tag
+        # GitHub sorts /releases by each release's created_at, which is
+        # the committer date of the tag's target commit. softprops/action-gh-release
+        # used to tag a static main HEAD (unchanged between builds), so every
+        # release reported the same created_at and the /releases list stopped
+        # reflecting recency: API consumers polling the first page never saw
+        # newer builds. Anchor each tag to a fresh empty commit whose
+        # committer date is build time so created_at advances and new
+        # releases sort to the top. Main is never pushed.
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.check-release.outputs.release_tag }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty \
+            -m "ComfyUI ${TAG} (ROCm build $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+          git tag "${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-release.outputs.release_tag }}
+          name: ComfyUI ${{ needs.check-release.outputs.release_tag }} (ROCm)
+          generate_release_notes: false
+          body: |
+            # ComfyUI ${{ needs.check-release.outputs.release_tag }} with ROCm Support
+
+            Pre-built Docker images of [ComfyUI](https://github.com/Comfy-Org/ComfyUI) bundled with the AMD ROCm runtime, published automatically by this repo's CI.
+
+            **Upstream release:** https://github.com/Comfy-Org/ComfyUI/releases/tag/${{ needs.check-release.outputs.release_tag }}
+            **Upstream ref:** `${{ needs.check-release.outputs.release_hash }}` (branch the tag was cut from — `target_commitish` in the GitHub API; for ComfyUI this is `master`)
+
+            ## Available images
+
+            | Image tag | Platform | ROCm | Typical hosts |
+            |-----------|----------|------|---------------|
+            | `${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-7.2-amd64` | `linux/amd64` | 7.2.4 | Radeon RX 9000 (RDNA 4, e.g. R9700), RX 7000 (RDNA 3), Ryzen AI iGPUs (gfx1150/1151/1152, RDNA 3.5), Instinct MI300X/MI325X |
+            | `${{ env.IMAGE }}:latest-rocm-7.2-amd64` | `linux/amd64` | 7.2.4 | Rolling latest on amd64 (alias) |
+
+            Built on top of the official [`rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`](https://hub.docker.com/r/rocm/pytorch/tags) base image — ROCm runtime + Python + PyTorch pre-validated for gfx1201 (RDNA 4), gfx1100/1101 (RDNA 3), and Instinct arches.
+
+            ## Quick start
+
+            ### `docker run`
+
+            ```bash
+            docker run --rm -it \
+              --device /dev/kfd \
+              --device /dev/dri \
+              --group-add video \
+              -p 8188:8188 \
+              -v ./data:/opt/comfyui/data \
+              ${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-7.2-amd64
+            ```
+
+            Open <http://localhost:8188>. Same flags work for both
+            discrete AMD GPUs and Ryzen AI iGPUs.
+
+            ### `docker compose`
+
+            ```bash
+            curl -SL -o compose.yaml \
+              https://raw.githubusercontent.com/genesis-scaffolding/comfyui-rocm/main/compose.yaml
+            mkdir data
+            docker compose up -d
+            ```
+
+            ## Host prerequisites
+
+            - Linux 5.15+ (6.0+ recommended for gfx1201)
+            - `amdgpu` kernel driver (open source, ships in mainline)
+            - ROCm userspace 6.4.4+ (for gfx1201 / RDNA 4)
+            - User in `render` and `video` groups
+            - `/dev/kfd` and `/dev/dri` exposed
+
+            On Ubuntu 24.04:
+
+            ```bash
+            sudo usermod -aG render,video $USER
+            # Either install via apt:
+            sudo apt install rocm
+            # Or use AMD's installer script for the latest ROCm:
+            sudo amdgpu-install --usecase=graphics,rocm
+            ```
+
+            Verify with `rocm-smi` and `python -c "import torch; print(torch.cuda.is_available())"`.
+
+            ## What's inside
+
+            - Base: [`rocm/pytorch:rocm7.2.4_ubuntu24.04_py3.12_pytorch_release_2.9.1`](https://hub.docker.com/r/rocm/pytorch/tags) (ROCm 7.2.4, Python 3.12, PyTorch 2.9.1 in `/opt/venv`)
+            - [ComfyUI](https://github.com/Comfy-Org/ComfyUI) at `${{ needs.check-release.outputs.release_tag }}`
+            - [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) pre-installed
+            - Runs as unprivileged user `comfyui` (UID/GID via `PUID`/`PGID`)
+
+            ## License
+
+            Build scripts in this repo are MIT-licensed. ComfyUI and bundled
+            dependencies retain their own licences; see each upstream project
+            for details.
+          draft: false
+          prerelease: false

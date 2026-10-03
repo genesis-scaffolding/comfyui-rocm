@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Docker build artifacts
+build/
+dist/
+
+# Compose runtime data (host-side bind mounts)
+/data/**
+!/data/.keep
+
+# Local image builds (from scripts/test-build.sh)
+*.tar
+*.tar.gz
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Task / uv cache
+.task/
+.python-version.bak

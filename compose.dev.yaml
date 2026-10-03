@@ -1,0 +1,37 @@
+# Local-development override. Use named volumes so multiple dev projects
+# don't share state. Combine with compose.yaml:
+#   docker compose -f compose.yaml -f compose.dev.yaml up
+#
+# Note: this assumes you have a locally-built image tagged
+# comfyui-rocm:test (from scripts/test-build.sh).
+
+services:
+  comfyui:
+    image: "comfyui-rocm:test"
+    pull_policy: "never"
+    restart: "no"
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      HIP_VISIBLE_DEVICES: "0"
+      CUDA_VISIBLE_DEVICES: ""
+    volumes:
+      - "python:/opt/comfyui/python"
+      - "custom_nodes:/opt/comfyui/app/custom_nodes"
+      - "models:/opt/comfyui/app/models"
+      - "input:/opt/comfyui/app/input"
+      - "output:/opt/comfyui/app/output"
+      - "profiles:/opt/comfyui/app/user"
+
+volumes:
+  python:
+  custom_nodes:
+  models:
+  input:
+  output:
+  profiles:

@@ -1,0 +1,44 @@
+# Pinned Python dependencies for the ComfyUI image.
+#
+# Resolved at runtime by `uv pip install --python /opt/venv/bin/python
+# -r requirements.in`. We do NOT pin torch here — the rocm/pytorch
+# base image ships a pre-validated torch+rocm combo (multi-arch wheels,
+# including gfx1201 for RDNA 4 / R9700). Reinstalling torch would
+# either pull a non-matching wheel or fail to find one.
+#
+# We do not commit a pylock.toml because the matrix version (ComfyUI)
+# changes often; regenerating the lock at build time is slower but
+# always matches the upstream tag. Switch to a committed pylock.toml
+# if reproducibility becomes a concern.
+
+#===============================================================================
+# COMFYUI
+#===============================================================================
+
+# ComfyUI server requirements (pinned at the upstream release tag)
+# https://github.com/Comfy-Org/ComfyUI
+-r "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/refs/tags/v${COMFYUI_VERSION}/requirements.txt"
+
+# ComfyUI's bundled manager dependency (the `comfyui_manager` PyPI
+# package). Required by the `--enable-manager` flag since ComfyUI
+# v0.34.x — Manager is now distributed as both a custom-node clone
+# (UI) and a PyPI package (backend).
+# https://github.com/Comfy-Org/ComfyUI
+-r "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/refs/tags/v${COMFYUI_VERSION}/manager_requirements.txt"
+
+# matrix-nio is needed for ComfyUI's sharing features (cross-instance
+# history sync). Pinned here because manager_requirements.txt only
+# declares the new comfyui_manager PyPI package.
+matrix-nio
+
+#===============================================================================
+# CUSTOM NODES
+#===============================================================================
+# Add each extension's requirements under a slug-keyed block, alphabetically:
+#
+#   # <slug>
+#   # https://github.com/<owner>/<repo>
+#   -r "https://raw.githubusercontent.com/<owner>/<repo>/refs/heads/main/requirements.txt"
+#
+# If the extension needs extra packages not in its requirements.txt, add them
+# on the lines immediately after the -r line.

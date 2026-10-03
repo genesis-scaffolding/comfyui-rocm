@@ -1,0 +1,54 @@
+# User-facing compose file. Pin the image tag for reproducibility.
+# To follow the latest published image, change the tag below to:
+#   ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64
+#
+# The rocm/pytorch base is linux/amd64 only. ROCm has no stable arm64
+# support, so there is no arm64 tag — same as the official
+# rocm/comfyui image.
+
+services:
+  comfyui:
+    hostname: comfyui
+    image: "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.34.0-rocm-7.2-amd64"
+    restart: "unless-stopped"
+    # ROCm device access. Replaces the NVIDIA-specific `runtime: nvidia`
+    # and `gpus:` blocks used by the cuda repo:
+    #   - /dev/kfd: KFD (Kernel Fusion Driver) — ROCm compute entry point
+    #   - /dev/dri: Direct Rendering Infrastructure — GPU node access
+    #   - group_add: video: required to open /dev/dri/renderD* nodes
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    command:
+      # Pass extra arguments to ComfyUI here.
+      # https://docs.comfy.org/interface/settings/server-config
+      - "--verbose"
+    environment:
+      PUID: "1000"  # adapt to your host user
+      PGID: "1000"  # adapt to your host group
+      # COMFYUI_NO_DEFAULTS: "true" disables the entrypoint's default flags
+      # ROCm-specific env:
+      HIP_VISIBLE_DEVICES: "0"
+      # torch.cuda.is_available() is the canonical check on ROCm too,
+      # but disambiguate from any host CUDA setup
+      CUDA_VISIBLE_DEVICES: ""
+    ports:
+      - "8188:8188"
+    volumes:
+      # Persist any custom nodes you install via Manager
+      - "./data/custom_nodes:/opt/comfyui/app/custom_nodes"
+
+      # Persist models (download manually into ./data/models/<subdir>)
+      - "./data/models:/opt/comfyui/app/models"
+
+      # Persist input / output images
+      - "./data/input:/opt/comfyui/app/input"
+      - "./data/output:/opt/comfyui/app/output"
+
+      # Persist user profiles (workflows, Manager config, ...)
+      - "./data/profiles:/opt/comfyui/app/user"
+
+      # Persist the Python venv between container recreations
+      - "./data/python:/opt/comfyui/python"
