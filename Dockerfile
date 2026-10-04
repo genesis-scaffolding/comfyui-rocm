@@ -139,6 +139,64 @@ RUN set -ex \
         && uv cache clean \
     "
 
+# Image size reduction. The rocm/dev-ubuntu-24.04 base ships
+# toolchain material we don't need at inference time:
+#
+#   - /opt/rocm/lib/llvm          2.2 GB   LLVM/clang compiler
+#   - /opt/rocm/bin/rocgdb-py_3.12 189 MB  ROCm debugger
+#   - /opt/rocm/bin/rocgdb-py_3.13 191 MB  ROCm debugger
+#   - /opt/rocm/bin/hipify-clang   57 MB   CUDA→HIP source translator
+#   - /opt/rocm/bin/roccoremerge   6.4 MB  legacy kernel merger
+#
+# None of these are required for inference. Keep /opt/rocm/bin
+# utilities (rocm-smi, amd-smi, rocminfo) and the runtime libs in
+# /opt/rocm/lib (hsa, amdhip64, amd_comgr, etc.). Total savings:
+# ~2.6 GB on disk, ~1.1 GiB compressed.
+#
+# Also strip --strip-unneeded on torch and triton shared objects.
+# The PyPI wheels are built with most debug info already removed,
+# but a small residue (~1 GB on torch, ~280 MB on triton) is left
+# in. Stripping is safe — the wheels do not need debug symbols at
+# runtime.
+#
+# Finally, prune the MIOpen kernel database to only the gfx targets
+# we support. The torch wheel ships pre-compiled MIOpen databases
+# for every supported gfx target (~780 MB total, ~50 files). For
+# the targets this image supports (RDNA 4, RDNA 3, RDNA 3.5, MI300X,
+# MI325X — i.e. gfx1200/1201, gfx1100/1101/1102, gfx1150/1151,
+# gfx942, gfx950), only ~20 of those files are needed. The other
+# ~30 are dead weight unless someone runs a gfx900/906/908/90a card.
+# If a user does show up with one of those, MIOpen falls back to
+# JIT compilation (slower first inference, then cached). Savings:
+# ~390 MB on disk, ~150 MiB compressed.
+#
+# hadolint ignore=DL3003
+RUN set -ex \
+    # 1. Remove ROCm toolchain we don't need at runtime
+    && rm -rf /opt/rocm/lib/llvm \
+    && rm -f /opt/rocm/bin/rocgdb-py_3.12 /opt/rocm/bin/rocgdb-py_3.13 \
+    && rm -f /opt/rocm/bin/hipify-clang /opt/rocm/bin/roccoremerge \
+    # 2. Strip torch + triton shared objects
+    && find /opt/comfyui/python/venv/lib/python3.13/site-packages/torch \
+           -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true \
+    && find /opt/comfyui/python/venv/lib/python3.13/site-packages/triton \
+           -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true \
+    # 3. Prune MIOpen db to supported gfx targets only
+    && cd /opt/comfyui/python/venv/lib/python3.13/site-packages/torch/share/miopen/db \
+    && find . -maxdepth 1 -type f \
+           ! -name 'gfx942*' \
+           ! -name 'gfx950*' \
+           ! -name 'gfx1100*' \
+           ! -name 'gfx1101*' \
+           ! -name 'gfx1102*' \
+           ! -name 'gfx1150*' \
+           ! -name 'gfx1151*' \
+           ! -name 'gfx1200*' \
+           ! -name 'gfx1201*' \
+           -delete \
+    # 4. Also remove aotriton.images for gfx90a (older Instinct MI210/MI250)
+    && rm -rf /opt/comfyui/python/venv/lib/python3.13/site-packages/torch/lib/aotriton.images/amd-gfx90a
+
 EXPOSE 8188
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
