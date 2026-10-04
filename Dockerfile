@@ -159,16 +159,16 @@ RUN set -ex \
 # in. Stripping is safe — the wheels do not need debug symbols at
 # runtime.
 #
-# Finally, prune the MIOpen kernel database to only the gfx targets
-# we support. The torch wheel ships pre-compiled MIOpen databases
-# for every supported gfx target (~780 MB total, ~50 files). For
-# the targets this image supports (RDNA 4, RDNA 3, RDNA 3.5, MI300X,
-# MI325X — i.e. gfx1200/1201, gfx1100/1101/1102, gfx1150/1151,
-# gfx942, gfx950), only ~20 of those files are needed. The other
-# ~30 are dead weight unless someone runs a gfx900/906/908/90a card.
-# If a user does show up with one of those, MIOpen falls back to
-# JIT compilation (slower first inference, then cached). Savings:
-# ~390 MB on disk, ~150 MiB compressed.
+# Finally, prune the MIOpen kernel database to drop files for gfx
+# targets we don't support. The torch wheel ships pre-compiled MIOpen
+# databases for the gfx targets it builds against. The full set in
+# torch 2.11.0+rocm7.2 is gfx900/906/908/90a (Vega + CDNA 1),
+# gfx942/950 (CDNA 2), and gfx1030/1031/1032 (RDNA 2). We keep
+# everything the docs claim to support (RDNA 2/3/3.5/4, CDNA 1/2)
+# and only drop gfx900/906 (Vega + RX 500 series — 2017 hardware,
+# explicitly not in the support matrix). Without the pre-compiled
+# db, MIOpen JIT-compiles on first inference (slower, then cached).
+# Net savings: ~130 MB on disk, ~30 MiB compressed.
 #
 # hadolint ignore=DL3003
 RUN set -ex \
@@ -181,11 +181,18 @@ RUN set -ex \
            -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true \
     && find /opt/comfyui/python/venv/lib/python3.13/site-packages/triton \
            -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true \
-    # 3. Prune MIOpen db to supported gfx targets only
+    # 3. Prune MIOpen db: drop only gfx900/gfx906 (Vega + RX 500 series)
+    # Keep everything else: gfx1030/1031/1032 (RDNA 2), gfx908/90a
+    # (CDNA 1, Instinct MI100/MI210/MI250), gfx942/950 (CDNA 2).
     && cd /opt/comfyui/python/venv/lib/python3.13/site-packages/torch/share/miopen/db \
     && find . -maxdepth 1 -type f \
            ! -name 'gfx942*' \
            ! -name 'gfx950*' \
+           ! -name 'gfx908*' \
+           ! -name 'gfx90a*' \
+           ! -name 'gfx1030*' \
+           ! -name 'gfx1031*' \
+           ! -name 'gfx1032*' \
            ! -name 'gfx1100*' \
            ! -name 'gfx1101*' \
            ! -name 'gfx1102*' \
@@ -193,9 +200,7 @@ RUN set -ex \
            ! -name 'gfx1151*' \
            ! -name 'gfx1200*' \
            ! -name 'gfx1201*' \
-           -delete \
-    # 4. Also remove aotriton.images for gfx90a (older Instinct MI210/MI250)
-    && rm -rf /opt/comfyui/python/venv/lib/python3.13/site-packages/torch/lib/aotriton.images/amd-gfx90a
+           -delete
 
 EXPOSE 8188
 
