@@ -28,10 +28,11 @@ variable "PYTHON_VERSION" {
 # The rocm/dev-ubuntu-24.04:<ROCM_VERSION> tag encodes the ROCm
 # version, the Ubuntu version, and the dev-tools layout. Currently
 # the only Ubuntu version published is 24.04.
+# ROCm 7.14+ is only published as "<version>-full" (TheRock layout).
 # See https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags for the
 # full list of available ROCm versions.
 variable "ROCM_VERSION" {
-  default = "7.2.4"
+  default = "7.14.1-full"
 }
 
 variable "UBUNTU_VERSION" {
@@ -41,6 +42,9 @@ variable "UBUNTU_VERSION" {
 target "build" {
   context = "."
   dockerfile = "Dockerfile"
+  # Explicit, because the Dockerfile has three stages and the final
+  # one ("runtime") is the flattened image we publish.
+  target = "runtime"
   args = {
     "COMFYUI_VERSION" = COMFYUI_VERSION
     "UV_VERSION" = UV_VERSION

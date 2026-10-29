@@ -27,7 +27,7 @@ PYTHON_VERSION=$(grep '^PYTHON_VERSION=' metadata.env | cut -d= -f2)
 ROCM_VERSION=$(grep '^ROCM_VERSION=' metadata.env | cut -d= -f2)
 [ -z "${UV_VERSION}" ]     && UV_VERSION="0.12.5"
 [ -z "${PYTHON_VERSION}" ] && PYTHON_VERSION="3.13"
-[ -z "${ROCM_VERSION}" ]   && ROCM_VERSION="7.2.4"
+[ -z "${ROCM_VERSION}" ]   && ROCM_VERSION="7.14.1-full"
 
 # Map current host arch to the matrix suffix.
 case "$(uname -m)" in
@@ -49,7 +49,8 @@ case "${COMFYUI_VERSION}" in
     v*) COMFYUI_VERSION="${COMFYUI_VERSION#v}" ;;
 esac
 
-# Short form of the ROCm version for the tag (e.g. 7.2.4 -> 7.2).
+# Short form of the ROCm version for the tag. ROCM_VERSION is the
+# FULL base image tag (e.g. 7.14.1-full -> 7.14; 7.2.4 -> 7.2).
 ROCM_SHORT=$(echo "${ROCM_VERSION}" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
 
 TAG="comfyui-rocm:test-v${COMFYUI_VERSION}-rocm-${ROCM_SHORT}-${ARCH}"

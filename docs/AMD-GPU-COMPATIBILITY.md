@@ -1,12 +1,22 @@
 # AMD GPU & ROCm Compatibility
 
-This image targets AMD GPUs supported by ROCm 7.2.4 with PyTorch 2.11.0
-(`+rocm7.2`) wheels. The system ROCm is installed from
-[`rocm/dev-ubuntu-24.04:7.2.4`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags);
+This image targets **two** AMD GPU architectures only:
+
+- `gfx1201` — RDNA 4 (RX 9070 XT, RX 9070, R9700, Radeon AI PRO R9700)
+- `gfx1100` — RDNA 3 (RX 7900 XTX, RX 7900 XT, RX 7900 GRE, PRO W7900)
+
+It runs ROCm 7.14.1 with PyTorch 2.14.1 (`+rocm7.14`) wheels. The
+system ROCm is installed from
+[`rocm/dev-ubuntu-24.04:7.14.1-full`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags);
 PyTorch is installed at build time from the
-[official PyTorch rocm7.2 wheel index](https://download.pytorch.org/whl/rocm7.2/)
-into the venv at `/opt/comfyui/python/venv`. The torch wheel's compiled-in
-gfx targets are listed below.
+[official PyTorch rocm7.14 wheel index](https://download.pytorch.org/whl/rocm7.14/)
+into the venv at `/opt/comfyui/python/venv`.
+
+Kernels for every other architecture (RDNA 2, RDNA 3 lower tier,
+RDNA 3.5 iGPUs, all CDNA datacenter parts) are **physically pruned
+from the image**, and the entrypoint refuses to start when it
+detects an unsupported GPU. See [Unsupported
+architectures](#unsupported-architectures) below.
 
 ## Finding your GPU's gfx code
 
@@ -19,47 +29,78 @@ python3 -c "import torch; print(torch.cuda.get_device_capability())"
 
 The gfx code is what determines ROCm compatibility. For example:
 
-| GPU | gfx code | Family |
-|-----|----------|--------|
-| R9700 (workstation) | gfx1201 | RDNA 4 |
-| RX 9070 XT | gfx1200 | RDNA 4 |
-| RX 9070 | gfx1200 | RDNA 4 |
-| RX 7900 XTX | gfx1100 | RDNA 3 |
-| RX 7800 XT | gfx1101 | RDNA 3 |
-| RX 7700 XT | gfx1101 | RDNA 3 |
-| RX 7600 | gfx1102 | RDNA 3 |
-| RX 6950 XT | gfx1030 | RDNA 2 |
-| RX 6800 XT | gfx1030 | RDNA 2 |
-| MI300X | gfx942 | CDNA 2 |
-| MI325X | gfx950 | CDNA 2 |
-| MI355X | gfx950 | CDNA 2 |
+| GPU | gfx code | Family | Supported? |
+|-----|----------|--------|------------|
+| R9700 / AI PRO R9700 | gfx1201 | RDNA 4 | ✅ |
+| RX 9070 XT / RX 9070 | gfx1201 | RDNA 4 | ✅ |
+| RX 9060 XT / 9050 | gfx1200 | RDNA 4 | ❌ pruned |
+| RX 7900 XTX / 7900 XT / 7900 GRE | gfx1100 | RDNA 3 | ✅ |
+| PRO W7900 | gfx1100 | RDNA 3 | ✅ |
+| RX 7800 XT / 7700 XT | gfx1101 | RDNA 3 | ❌ pruned |
+| RX 7600 | gfx1102 | RDNA 3 | ❌ pruned |
+| Radeon 680M (Ryzen 6000 iGPU) | gfx1035 | RDNA 2 | ❌ pruned |
+| RX 6950 XT / 6800 XT | gfx1030 | RDNA 2 | ❌ pruned |
+| MI300X | gfx942 | CDNA 2 | ❌ pruned |
+| MI325X / MI355X | gfx950 | CDNA 2 | ❌ pruned |
+| MI100 / MI210 / MI250 | gfx908 / gfx90a | CDNA 1 | ❌ pruned |
 
-## Supported GPUs (image built on ROCm 7.2.4)
+## Supported GPUs (image built on ROCm 7.14.1)
 
 | Family | Example GPUs | Min ROCm | Notes |
 |--------|--------------|----------|-------|
-| **RDNA 4 (gfx1200/1201)** | R9700, RX 9070 XT, RX 9070 | 6.3+ | **32GB workstation variants (R9700) supported.** Best consumer targets as of late 2025. |
-| **RDNA 3.5 iGPU (gfx1150/1151/1152)** | Ryzen AI 9 HX 370, Ryzen AI Max 395, Ryzen AI 7 350 (Radeon 860M) | 6.4+ | **Unified memory: VRAM drawn from system RAM.** Krackan Point / Strix Point / Strix Halo. Tested with Radeon 860M. See [APU section](#apu--ryzen-ai-igpu-section) below. |
-| **RDNA 3 (gfx1100/1101/1102)** | RX 7900 XTX, RX 7800 XT, RX 7700 XT, RX 7600 | 5.7+ | First ROCm-friendly consumer RDNA generation. |
-| **RDNA 2 (gfx1030/1031/1032)** | RX 6950 XT, RX 6800 XT, RX 6700 XT, RX 6600 | 5.0+ | ROCm 5.x onward; some quirks on the lower-tier cards. |
-| **CDNA 2 (gfx942/950)** | Instinct MI300X, MI325X, MI355X | 6.0+ | Datacenter. The official `rocm/comfyui` image targets only these. |
-| **CDNA (gfx908/90a)** | Instinct MI100, MI210, MI250 | 5.0+ | Older datacenter. Still works with this image. |
+| **RDNA 4 (gfx1201)** | R9700, AI PRO R9700, RX 9070 XT, RX 9070 | 6.3+ | 32 GB workstation variants (R9700) supported. The primary target. |
+| **RDNA 3 (gfx1100)** | RX 7900 XTX, RX 7900 XT, RX 7900 GRE, PRO W7900 | 5.7+ | The gfx1100 SKU of RDNA 3 only. |
 
-This is a representative subset. The full list is the `PYTORCH_ROCM_ARCH`
-the base image was built with — verify inside the container with:
+## Unsupported architectures
 
-```bash
-docker exec -it <container> \
-    /opt/comfyui/python/venv/bin/python -c "import torch; print(torch.cuda.get_arch_list())"
+Everything else is pruned from the image. The entrypoint checks the
+host GPU's gfx code (`rocminfo`) at start-up and exits with an
+explicit error if it is not `gfx1201` or `gfx1100`:
+
+```
+** ERROR: unsupported GPU architecture 'gfx1152'.
+** This image supports only: gfx1201 gfx1100
 ```
 
-Expected output (for the rocm7.2 torch 2.11.0 wheel):
-`['gfx900', 'gfx906', 'gfx908', 'gfx90a', 'gfx942', 'gfx1030',
-'gfx1100', 'gfx1101', 'gfx1102', 'gfx1200', 'gfx1201', 'gfx950',
-'gfx1150', 'gfx1151']` (the exact list may vary slightly per
-release).
+Bypass the check with `GFX_ALLOWLIST=""` (only useful for
+debugging — the kernels for other targets are not in the image).
+
+Pruned in the image build:
+
+| Target family | Examples | What was removed |
+|----------------|----------|------------------|
+| RDNA 2 | RX 6000/5000, Radeon 680M iGPU | rocBLAS/hipBLASLt/MIOpen kernels |
+| RDNA 3 lower tier | RX 7800/7700/7600 (gfx1101/1102) | rocBLAS/hipBLASLt/MIOpen kernels |
+| RDNA 3.5 iGPUs | Ryzen AI / Strix / Krackan Point (gfx1150-1153) | rocBLAS/hipBLASLt/MIOpen kernels |
+| RDNA 4 lower tier | RX 9060 XT / 9050 (gfx1200) | rocBLAS/hipBLASLt/MIOpen kernels |
+| CDNA 1/2/4 | MI100/MI200/MI300/MI350/MI450 | MIOpen kernels, MIOpen kernel DB |
+
+Note the MIOpen kernel database shipped in the ROCm base image only
+ever contained CDNA and RDNA 2 entries — gfx1100/gfx1201 always ran
+through MIOpen's built-in fallback path — so removing the whole DB
+does not change behaviour on the supported targets.
+
+The prune covers two ROCm copies, not one:
+
+- `/opt/rocm` in the ROCm base image (19 GB -> 5.4 GB).
+- `site-packages/_rocm_sdk_libraries` in the torch wheel (12 GB ->
+  3 GB) — this is the one that matters, because `libtorch_hip.so`
+  has `RPATH=$ORIGIN/../../_rocm_sdk_libraries/lib`, so the wheel's
+  bundled runtime is what torch actually loads.
+
+45 of the 47 gfx targets in the base image are removed. The build
+asserts afterwards that all three swept roots contain only gfx1100
+and gfx1201 — and that the sweep did not delete those two.
 
 ## APU / Ryzen AI iGPU section
+
+> **Not supported by the current image.** The iGPU families
+> (gfx1150/1151/1152 — Strix Point, Strix Halo, Krackan Point) and
+> RDNA 2 iGPUs (gfx1030-1035 — e.g. Radeon 680M) are pruned from the
+> image, and the entrypoint refuses to start on them. This section
+> documents the behaviour of the previous (ROCm 7.2) build for
+> reference — check out the git history of this repo if you need an
+> iGPU-capable image.
 
 APU integrated GPUs are a special case: there's no dedicated VRAM,
 the iGPU draws from system RAM via the unified-memory architecture.
@@ -220,6 +261,7 @@ the device firmware for newer GPUs.
 
 | ROCm in image | Min host kernel | Min `amdgpu` driver |
 |---------------|-----------------|---------------------|
+| 7.14.x | 6.0+ | 6.0+ (in-kernel, also called `amdgpu` in mainline) |
 | 7.2.x | 6.0+ | 6.0+ (in-kernel, also called `amdgpu` in mainline) |
 | 6.4.x | 5.15+ | 6.4.x (ROCm 6.4 release) |
 | 6.3.x | 5.15+ | 6.3.x |
@@ -264,35 +306,37 @@ ROCm uses `gfx` codes instead of NVIDIA's compute capabilities. The
 [official AMD table](https://llvm.org/docs/AMDGPUUsage.html#processors)
 is authoritative; this is a subset.
 
-### gfx1200/1201 — RDNA 4
+### gfx1201 — RDNA 4
 
 - AMD Radeon AI PRO R9700 (gfx1201, 32 GB workstation) ✅
-- AMD Radeon RX 9070 XT (gfx1200, 16 GB) ✅
-- AMD Radeon RX 9070 (gfx1200) ✅
+- AMD Radeon RX 9070 XT (gfx1201, 16 GB) ✅
+- AMD Radeon RX 9070 (gfx1201) ✅
+- AMD Radeon RX 9060 XT / 9050 (gfx1200) ❌ pruned
 
-### gfx1100/1101/1102 — RDNA 3
+### gfx1100 — RDNA 3
 
-- AMD Radeon RX 7900 XTX / RX 7900 XT (gfx1100, 24 GB / 20 GB) ✅
-- AMD Radeon RX 7800 XT (gfx1101, 16 GB) ✅
-- AMD Radeon RX 7700 XT (gfx1101, 12 GB) ✅
-- AMD Radeon RX 7600 (gfx1102, 8 GB) ✅
+- AMD Radeon RX 7900 XTX / RX 7900 XT / RX 7900 GRE (gfx1100, 24/20 GB) ✅
+- AMD Radeon PRO W7900 / W7900 Dual Slot (gfx1100) ✅
+- AMD Radeon RX 7800 XT (gfx1101, 16 GB) ❌ pruned
+- AMD Radeon RX 7700 XT (gfx1101, 12 GB) ❌ pruned
+- AMD Radeon RX 7600 (gfx1102, 8 GB) ❌ pruned
 
 ### gfx1030/1031/1032 — RDNA 2
 
-- AMD Radeon RX 6950 XT / 6900 XT / 6800 XT / 6800 (gfx1030, 16-24 GB) ✅
-- AMD Radeon RX 6700 XT / 6700 (gfx1031, 10-12 GB) ✅
-- AMD Radeon RX 6600 XT / 6600 (gfx1032, 8 GB) ✅
+- AMD Radeon RX 6950 XT / 6900 XT / 6800 XT / 6800 (gfx1030, 16-24 GB) ❌ pruned
+- AMD Radeon RX 6700 XT / 6700 (gfx1031, 10-12 GB) ❌ pruned
+- AMD Radeon RX 6600 XT / 6600 (gfx1032, 8 GB) ❌ pruned
 
 ### gfx942/950 — CDNA 2 (datacenter)
 
-- AMD Instinct MI300X (gfx942, 192 GB HBM3) ✅
-- AMD Instinct MI325X (gfx950, 256 GB HBM3e) ✅
-- AMD Instinct MI355X (gfx950, 288 GB HBM3e) ✅
+- AMD Instinct MI300X (gfx942, 192 GB HBM3) ❌ pruned
+- AMD Instinct MI325X (gfx950, 256 GB HBM3e) ❌ pruned
+- AMD Instinct MI355X (gfx950, 288 GB HBM3e) ❌ pruned
 
 ### gfx908/90a — CDNA (older datacenter)
 
-- AMD Instinct MI100 (gfx908) ✅
-- AMD Instinct MI210 / MI250 / MI250X (gfx90a) ✅
+- AMD Instinct MI100 (gfx908) ❌ pruned
+- AMD Instinct MI210 / MI250 / MI250X (gfx90a) ❌ pruned
 
 ## Recommendations by use case
 
@@ -304,15 +348,15 @@ room to spare.
 
 ### Data centre (MI300X, MI300X)
 
-The image works on Instinct cards, though AMD's own
-[`rocm/comfyui`](https://hub.docker.com/r/rocm/comfyui) image is
-more focused on these (and only supports `gfx942;gfx950`). If you
-need Instinct-specific kernel tuning, use AMD's image.
+**Not supported** — the CDNA kernels are pruned from this image. If
+you need Instinct, use AMD's own
+[`rocm/comfyui`](https://hub.docker.com/r/rocm/comfyui) image, which
+targets `gfx942;gfx950`.
 
 ### Older consumer (RX 6000 series)
 
-Works, but PyTorch's gfx1030 build is less battle-tested than the
-RDNA 3/4 paths. Expect occasional quirks on MIOpen kernels.
+**Not supported** — RDNA 2 (gfx1030-1035) kernels are pruned from
+this image.
 
 ## Additional resources
 

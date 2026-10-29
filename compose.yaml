@@ -1,15 +1,18 @@
 # User-facing compose file. Pin the image tag for reproducibility.
 # To follow the latest published image, change the tag below to:
-#   ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64
+#   ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.14-amd64
 #
 # The rocm/dev-ubuntu-24.04 base is linux/amd64 only. ROCm has no stable
 # arm64 support, so there is no arm64 tag — same as the official
 # rocm/comfyui image.
+#
+# Supported GPU architectures: gfx1201 (RDNA 4) and gfx1100 (RDNA 3)
+# only. See docs/AMD-GPU-COMPATIBILITY.md.
 
 services:
   comfyui:
     hostname: comfyui
-    image: "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.34.0-rocm-7.2-amd64"
+    image: "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.34.0-rocm-7.14-amd64"
     restart: "unless-stopped"
     # ROCm device access. Replaces the NVIDIA-specific `runtime: nvidia`
     # and `gpus:` blocks used by the cuda repo:

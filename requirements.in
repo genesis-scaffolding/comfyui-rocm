@@ -10,27 +10,35 @@
 # CORE (PyTorch + ROCm wheels)
 #===============================================================================
 
-# Wheels index for PyTorch's ROCm 7.2 build. 7.2 wheels are the
-# version-matched set for a system running ROCm 7.2.x (the lowest
+# Wheels index for PyTorch's ROCm 7.14 build. 7.14 wheels are the
+# version-matched set for a system running ROCm 7.14.x (the lowest
 # supported version is encoded in the wheel's tag, and a newer system
-# ROCm is forward-compatible). The build host runs ROCm 7.2.4 from the
-# rocm/dev-ubuntu-24.04:7.2.4 base image.
---extra-index-url "https://download.pytorch.org/whl/rocm7.2"
+# ROCm is forward-compatible). The build host runs ROCm 7.14.1 from
+# the rocm/dev-ubuntu-24.04:7.14.1-full base image.
+--extra-index-url "https://download.pytorch.org/whl/rocm7.14"
 
-# PyTorch. Versions must match a published rocm7.2 wheel. If the
+# PyTorch. Versions must match a published rocm7.14 wheel. If the
 # upstream ComfyUI release needs a different torch, update these pins
 # and the ROCM_VERSION in metadata.env + docker-bake.hcl together.
-# 2.11.0 is the oldest rocm7.2 wheel; 2.12/2.13/2.14 are also
-# available (newer is fine, but we pin to 2.11.0 to stay close to
-# the 2.9.1 build that rocm/pytorch:7.2.4 used in the previous
-# revision of this image, since R9700 / gfx1201 was verified working
-# with that base).
-# https://download.pytorch.org/whl/rocm7.2/torch/
-torch==2.11.0+rocm7.2
-# https://download.pytorch.org/whl/rocm7.2/torchvision/
-torchvision==0.26.0+rocm7.2
-# https://download.pytorch.org/whl/rocm7.2/torchaudio/
-torchaudio==2.11.0+rocm7.2
+# 2.14.1 is the newest rocm7.14 wheel that has a matching
+# torchvision on the same index (torchvision 0.29.1). torch 2.15.0
+# also exists for rocm7.14, but the matching torchvision for it
+# (0.30.x) is not published on the index yet.
+# https://download.pytorch.org/whl/rocm7.14/torch/
+torch==2.14.1+rocm7.14
+# https://download.pytorch.org/whl/rocm7.14/torchvision/
+torchvision==0.29.1+rocm7.14
+# https://download.pytorch.org/whl/rocm7.14/torchaudio/
+#
+# torchaudio is pinned to the ROCm build because ComfyUI's own
+# requirements.txt lists a bare `torchaudio`. The PyPI build of
+# torchaudio is a CUDA build — it links against libcudart and the
+# CUDA libtorch, so installing it alongside a ROCm torch breaks the
+# venv. The only torchaudio on the rocm7.14 index is 2.11.1 (a
+# py3-none wheel that declares `torch>=2.11`, so it resolves against
+# torch 2.14.1). PyPI's own latest is also 2.11.1, but it is the
+# CUDA build.
+torchaudio==2.11.1+rocm7.14
 
 # Note: xformers is intentionally omitted. PyTorch's ROCm wheels do
 # not bundle xformers, and ComfyUI falls back to SDPA attention,

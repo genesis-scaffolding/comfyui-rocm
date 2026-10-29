@@ -93,8 +93,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - rocm_version: "7.2.4"
-            rocm_version_short: "7.2"
+          # ROCm 7.14+ is only published as "<version>-full"
+          # (TheRock layout, ~19 GB unpacked). The short form drives
+          # the image tag suffix: -rocm-7.14-amd64.
+          - rocm_version: "7.14.1-full"
+            rocm_version_short: "7.14"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -209,10 +212,10 @@ jobs:
 
             | Image tag | Platform | ROCm | Typical hosts |
             |-----------|----------|------|---------------|
-            | `${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-7.2-amd64` | `linux/amd64` | 7.2.4 | Radeon RX 9000 (RDNA 4, e.g. R9700), RX 7000 (RDNA 3), Ryzen AI iGPUs (gfx1150/1151/1152, RDNA 3.5), Instinct MI300X/MI325X |
-            | `${{ env.IMAGE }}:latest-rocm-7.2-amd64` | `linux/amd64` | 7.2.4 | Rolling latest on amd64 (alias) |
+            | `${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-7.14-amd64` | `linux/amd64` | 7.14.1 | Radeon RX 9000 (RDNA 4, gfx1201 — R9700, RX 9070 XT), Radeon RX 7000 (RDNA 3, gfx1100 — RX 7900 XTX/XT) |
+            | `${{ env.IMAGE }}:latest-rocm-7.14-amd64` | `linux/amd64` | 7.14.1 | Rolling latest on amd64 (alias) |
 
-            Built on top of [`rocm/dev-ubuntu-24.04:7.2.4`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags) (Ubuntu 24.04 + ROCm 7.2.4 runtime, no Python, no PyTorch) plus [PyTorch +rocm7.2 wheels](https://download.pytorch.org/whl/rocm7.2/) installed into a venv at `/opt/comfyui/python/venv` (which lives INSIDE the bind mount, so user `pip install`s persist across `docker compose up --force-recreate`). The venv design mirrors [comfyui-cuda](https://github.com/genesis-scaffolding/comfyui-cuda).
+            Built on top of [`rocm/dev-ubuntu-24.04:7.14.1-full`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags) (Ubuntu 24.04 + ROCm 7.14.1 runtime, no Python, no PyTorch) plus [PyTorch +rocm7.14 wheels](https://download.pytorch.org/whl/rocm7.14/) installed into a venv at `/opt/comfyui/python/venv` (which lives INSIDE the bind mount, so user `pip install`s persist across `docker compose up --force-recreate`). The venv design mirrors [comfyui-cuda](https://github.com/genesis-scaffolding/comfyui-cuda).
 
             ## Quick start
 
@@ -225,7 +228,7 @@ jobs:
               --group-add video \
               -p 8188:8188 \
               -v ./data:/opt/comfyui/data \
-              ${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-7.2-amd64
+              ${{ env.IMAGE }}:${{ needs.check-release.outputs.release_tag }}-rocm-7.14-amd64
             ```
 
             Open <http://localhost:8188>. Same flags work for both
@@ -262,8 +265,9 @@ jobs:
 
             ## What's inside
 
-            - Base: [`rocm/dev-ubuntu-24.04:7.2.4`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags) (Ubuntu 24.04 + ROCm 7.2.4 runtime)
-            - [PyTorch +rocm7.2 wheels](https://download.pytorch.org/whl/rocm7.2/) (torch / torchvision / torchaudio 2.11.0) installed at build time into a venv at `/opt/comfyui/python/venv`
+            - Base: [`rocm/dev-ubuntu-24.04:7.14.1-full`](https://hub.docker.com/r/rocm/dev-ubuntu-24.04/tags) (Ubuntu 24.04 + ROCm 7.14.1 runtime)
+            - [PyTorch +rocm7.14 wheels](https://download.pytorch.org/whl/rocm7.14/) (torch 2.14.1 / torchvision 0.29.1 / torchaudio 2.11.1) installed at build time into a venv at `/opt/comfyui/python/venv`
+            - **Supported GPU architectures: `gfx1201` (RDNA 4) and `gfx1100` (RDNA 3) only.** Kernels for every other target are pruned from the image.
             - [ComfyUI](https://github.com/Comfy-Org/ComfyUI) at `${{ needs.check-release.outputs.release_tag }}`
             - [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) pre-installed
             - `--disable-pinned-memory` baked in (saves ~15 GB of system RAM staging buffer — see `entrypoint.sh` for the rocm-specific reason)

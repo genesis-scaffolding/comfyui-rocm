@@ -4,10 +4,14 @@ Get ComfyUI running in a Docker container on an AMD GPU in a few minutes.
 
 ## Prerequisites
 
-1. A Linux host with an AMD GPU supported by ROCm 7.2.x. Confirmed targets:
-   - **Radeon RX 9000 series (RDNA 4)** — e.g. R9700, RX 9070 XT (gfx1200/1201)
-   - **Radeon RX 7000 series (RDNA 3)** — e.g. RX 7900 XTX, RX 7800 XT (gfx1100/1101)
-   - **AMD Instinct MI300X / MI325X / MI355X** (gfx942/950)
+1. A Linux host with an AMD GPU supported by ROCm 7.14.x. This image
+   supports exactly two architectures:
+   - **Radeon RX 9000 series (RDNA 4)** — gfx1201 only (R9700, AI PRO R9700, RX 9070 XT, RX 9070)
+   - **Radeon RX 7000 series (RDNA 3)** — gfx1100 only (RX 7900 XTX, RX 7900 XT, PRO W7900)
+
+   Everything else (RX 9060/9050 = gfx1200, RX 7800/7700/7600 =
+   gfx1101/1102, RDNA 2, RDNA 3.5 iGPUs, Instinct MI-series) is
+   pruned from the image and will be rejected at start-up.
 2. Linux kernel 5.15+ (6.0+ recommended for gfx1201). The `amdgpu` driver
    ships in mainline, so most modern distros have it.
 3. Docker installed.
@@ -66,15 +70,15 @@ Each release publishes one image per host architecture:
 
 | Your host CPU | Image tag |
 |---------------|-----------|
-| `x86_64` / amd64 | `ghcr.io/genesis-scaffolding/comfyui-rocm:<version>-rocm-7.2-amd64` |
+| `x86_64` / amd64 | `ghcr.io/genesis-scaffolding/comfyui-rocm:<version>-rocm-7.14-amd64` |
 
 `<version>` is the upstream ComfyUI tag (e.g. `v0.34.0`), or use
-`latest-rocm-7.2-amd64` for the rolling amd64 latest.
+`latest-rocm-7.14-amd64` for the rolling amd64 latest.
 
 ## Step 4 — pull
 
 ```bash
-docker pull ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64
+docker pull ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.14-amd64
 ```
 
 ## Step 5 — run
@@ -89,7 +93,7 @@ docker run --rm -it \
   --group-add video \
   -p 8188:8188 \
   -v "$PWD/data:/opt/comfyui/data" \
-  ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.2-amd64
+  ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.14-amd64
 ```
 
 Open <http://localhost:8188>.
@@ -199,7 +203,7 @@ This is the same check as for a CUDA host — it's a torch question,
 not a docker question. The bundled torch
 (`/opt/comfyui/python/venv/bin/python -c "import torch;
 print(torch.__version__, torch.version.hip)"`) should report a
-`+rocm7.2` wheel. If it doesn't, the build's `uv pip install`
+`+rocm7.14` wheel. If it doesn't, the build's `uv pip install`
 step failed — file an issue.
 
 ### `Could not load the ROCm runtime library`
@@ -209,15 +213,32 @@ container. Update both:
 - `sudo apt update && sudo apt upgrade` (kernel + mesa + amdgpu)
 - `sudo amdgpu-install --usecase=graphics,rocm` (latest ROCm)
 
+### `unsupported GPU architecture 'gfxXXXX'`
+
+The entrypoint refuses to start on a GPU this image does not
+support. Only `gfx1201` (RDNA 4) and `gfx1100` (RDNA 3) are
+supported — every other target's kernels are pruned from the image.
+The message looks like this:
+
+```
+** ERROR: unsupported GPU architecture 'gfx1152'.
+** This image supports only: gfx1201 gfx1100
+```
+
+Check your card's gfx code with `rocminfo | grep -A1 "Name:"` on the
+host. If your card is a supported model but reports a different gfx
+code (e.g. RX 9070 XT reporting gfx1200 on some SKUs), file an
+issue with the GPU model.
+
 ### `unsupported gfx version: gfxXXXX`
 
 Your GPU's gfx code is not in the bundled torch's compiled-in list.
-The torch 2.11.0+rocm7.2 wheel supports `gfx900;gfx906;gfx908;
-gfx90a;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1102;gfx1150;
-gfx1151;gfx1200;gfx1201` (verify with
+The torch 2.14.1+rocm7.14 wheel supports `gfx908;gfx90a;gfx942;
+gfx950;gfx1030;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;
+gfx1201;gfx1250` (verify with
 `/opt/comfyui/python/venv/bin/python -c "import torch; print(torch.cuda.get_arch_list())"`
-inside the container). If your card isn't in that list, you need a
-different torch wheel — file an issue with the GPU model.
+inside the container), but this image keeps kernels for `gfx1201`
+and `gfx1100` only.
 
 ### ComfyUI starts but `http://localhost:8188` doesn't load
 

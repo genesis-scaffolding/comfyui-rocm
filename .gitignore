@@ -28,3 +28,4 @@ dist/
 # Task / uv cache
 .task/
 .python-version.bak
+.cptr

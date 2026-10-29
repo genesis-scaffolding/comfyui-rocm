@@ -23,6 +23,21 @@ COMFYUI_PATCHES_DIR="${COMFYUI_HOME}/patches"
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 
+# Supported GPU architectures. This image ships kernels for exactly
+# two targets:
+#
+#   gfx1201 — RDNA 4  (RX 9070 XT, RX 9070, R9700, AI PRO R9700)
+#   gfx1100 — RDNA 3  (RX 7900 XTX, RX 7900 XT, PRO W7900)
+#
+# Everything else is pruned from the image, so running on another
+# target would fail in confusing ways deep inside the math library.
+# We detect the host GPU's gfx code from the KFD topology and refuse
+# to start on an unsupported target with a clear message.
+#
+# Set GFX_ALLOWLIST="" to disable the check (e.g. when debugging on
+# a target whose kernels are still present in the base image).
+GFX_ALLOWLIST="${GFX_ALLOWLIST-gfx1201 gfx1100}"
+
 # uv / venv settings
 #
 # VIRTUAL_ENV is the bind-mounted venv. Anything the user installs
@@ -157,6 +172,59 @@ function fix_perms() {
     exec gosu comfyui "$0" "$@"
 }
 
+# Detect the gfx code(s) of the GPUs exposed to this container via
+# KFD. The kernel driver publishes them as
+#   /sys/class/kfd/kfd/topology/nodes/<node>/properties
+# with a line like `gfx_target_version : 0x1201`.
+function detect_gfx_archs() {
+    local out
+
+    # Preferred: rocminfo reports the gfx code of every GPU agent.
+    if command -v rocminfo >/dev/null 2>&1; then
+        out="$(rocminfo 2>/dev/null \
+            | awk -F: '/^[[:space:]]*Name:[[:space:]]*gfx/ {
+                        gsub(/[[:space:]]/, "", $2); print $2 }' \
+            | sort -u)" || true
+        if [[ -n "${out}" ]]; then
+            echo "${out}"
+            return 0
+        fi
+    fi
+
+    # Fallback: KFD topology. gfx_target_version holds the ASIC
+    # marketing-name id (e.g. 100305), NOT the gfx code, so only
+    # accept values that already look like a gfx code.
+    out="$(grep -h 'gfx_target_version' \
+                /sys/class/kfd/kfd/topology/nodes/*/properties 2>/dev/null \
+            | tr -s ' ' '\n' \
+            | grep -E '^gfx[0-9]{4}$' \
+            | sort -u)" || true
+    [[ -n "${out}" ]] && echo "${out}"
+    return 0
+}
+
+# Refuse to start on a GPU architecture this image does not support.
+function check_gfx_arch() {
+    [[ -n "${GFX_ALLOWLIST}" ]] || return 0
+
+    local archs arch
+    archs="$(detect_gfx_archs)"
+    [[ -n "${archs}" ]] || return 0
+
+    for arch in ${archs}; do
+        if ! grep -qw -- "${arch}" <<< "${GFX_ALLOWLIST}"; then
+            log "ERROR: unsupported GPU architecture '${arch}'."
+            log "This image supports only: ${GFX_ALLOWLIST}"
+            log "  gfx1201 — RDNA 4 (RX 9070 XT, RX 9070, R9700)"
+            log "  gfx1100 — RDNA 3 (RX 7900 XTX, RX 7900 XT, PRO W7900)"
+            log "Set GFX_ALLOWLIST='' to bypass this check."
+            exit 1
+        fi
+    done
+
+    log "GPU architecture: ${archs}"
+}
+
 # Initialise ComfyUI-Manager's profile if Manager is installed.
 function init_manager() {
     local mgr_dir="${COMFYUI_CUSTOM_NODES_DIR}/comfyui-manager"
@@ -188,6 +256,7 @@ EOF
 
 function _main() {
     setup_dirs
+    check_gfx_arch
     fix_perms "$@"
 
     # Now running as comfyui

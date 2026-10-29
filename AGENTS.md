@@ -24,9 +24,14 @@ inputs.
 
 - `.github/workflows/build.yml` — the CI itself. Edit the matrix to
   add ROCm versions or host architectures.
-- `Dockerfile` — multi-stage. Takes `COMFYUI_VERSION` as a build arg,
-  clones ComfyUI at that tag, installs Python deps via uv into a
-  venv at `/opt/comfyui/python/venv` (inside the bind mount).
+- `Dockerfile` — three stages: `uv` (side-image with the uv
+  binary), `build` (the ROCm base + ComfyUI + venv + the gfx
+  kernel prune), and `runtime` (plain `ubuntu:24.04` plus the
+  pruned tree copied in, which is what makes the prune shrink the
+  PULL size and not just the running container — see "Pruning needs
+  a flattening stage" below). Takes `COMFYUI_VERSION` as a build
+  arg, clones ComfyUI at that tag, installs Python deps via uv into
+  a venv at `/opt/comfyui/python/venv` (inside the bind mount).
 - `docker-bake.hcl` — bake config. Validates required variables and
   exposes the build target.
 - `entrypoint.sh` — runs at container start. Handles UID/GID, syncs
@@ -37,7 +42,7 @@ inputs.
 - `extensions.sh` — list of pre-installed custom nodes (currently
   just ComfyUI-Manager). Add new extensions here.
 - `requirements.in` — pinned Python dependencies. The torch
-  +rocm7.2 wheels are pinned at the top, then the upstream ComfyUI
+  +rocm7.14 wheels are pinned at the top, then the upstream ComfyUI
   requirements URL is templated on `COMFYUI_VERSION`.
 - `metadata.env` — pinned versions of upstream tools (uv, ROCm,
   Python) and the default ComfyUI version used for local builds.
@@ -70,21 +75,26 @@ For local development:
   -p 8188:8188 comfyui-rocm:test-v<comfyui>-rocm-<base>-amd64` and
   verify ComfyUI serves at `http://localhost:8188`.
 
-The test box for this project is a Ryzen AI 7 350 workstation
-(Radeon 860M iGPU, gfx1152, RDNA 3.5). It can build, smoke-test,
-AND run end-to-end tests because the rocm/dev-ubuntu-24.04 base has
-gfx1150/1151 in its kernel list and the iGPU's unified memory
-works as VRAM. **For gfx1152 silicon (Krackan Point, e.g. Ryzen
-AI 7 350), the container needs `HSA_OVERRIDE_GFX_VERSION=11.5.1`
-or matmul segfaults.** See `docs/AMD-GPU-COMPATIBILITY.md` for
-the workaround. The same device flags work for both the iGPU and
-discrete AMD GPUs. Performance on the iGPU is bandwidth-limited
-(no dedicated VRAM) but full ComfyUI inference runs successfully.
+The test box for this project is a Ryzen 9 6900HX / Radeon 680M
+host (gfx1035, RDNA 2 iGPU). It can build and smoke-test, but its
+GPU is **not** one of the two supported architectures (gfx1201 /
+gfx1100), so end-to-end GPU inference cannot be validated on it
+for the current build — the entrypoint's gfx guard rejects it. Use
+`GFX_ALLOWLIST=""` to bypass the guard when debugging, but the
+per-architecture kernels for gfx1035 are pruned from the image, so
+real inference will not work. End-to-end validation needs a gfx1201
+(RDNA 4) or gfx1100 (RDNA 3) host.
+
+Earlier revisions of this image (ROCm 7.2) also supported RDNA 3.5
+iGPUs (gfx1150/1151/1152 — Strix Point, Strix Halo, Krackan
+Point), including the `HSA_OVERRIDE_GFX_VERSION=11.5.1` workaround
+needed by gfx1152 silicon. That support is gone in the current
+build. See `docs/AMD-GPU-COMPATIBILITY.md`.
 
 ## Conventions
 
 - Image tags: `<upstream-version>-rocm-<short>-<arch>`,
-  e.g. `v0.34.0-rocm-7.2-amd64`.
+  e.g. `v0.34.0-rocm-7.14-amd64`.
 - The `release` job uses the empty-commit-on-tag trick from
   comfyui-cuda: each GitHub Release points at a fresh empty commit
   so the release list sorts by build time.
@@ -116,11 +126,13 @@ This is the same gotcha the comfyui-cuda repo's AGENTS.md calls out.
 - `requirements.in` references `${COMFYUI_VERSION}`; the Dockerfile
   substitutes it via `sed` before `uv` reads the file. `uv` does
   not perform shell-style variable expansion on its input.
-- `ROCM_VERSION` (e.g. `7.2.4`) is the version tag of the
-  `rocm/dev-ubuntu-24.04` base image. The Dockerfile's `FROM`
-  references it directly, and the requirement.txt's
-  `--extra-index-url` is `rocm7.2` (the .X of the wheel index
-  tracks the system ROCm, not the exact patch).
+- `ROCM_VERSION` (e.g. `7.14.1-full`) is the full base image tag of
+  `rocm/dev-ubuntu-24.04`. ROCm 7.14+ is only published as
+  `<version>-full` (the TheRock layout); the plain / `-complete`
+  tags stopped after 7.2.x. The Dockerfile's `FROM` references the
+  tag directly, and the requirements.txt's `--extra-index-url` is
+  `rocm7.14` (the .X of the wheel index tracks the system ROCm, not
+  the exact patch).
 - `PYTHON_VERSION` (e.g. `3.13`) is the version of Python that `uv`
   installs into the venv. The rocm base ships no Python; `uv
   python install` fetches it.
@@ -132,11 +144,11 @@ This image is structurally identical to
 now. Both:
 
 - Use a thin GPU-runtime base (cuda: `nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04`
-  / rocm: `rocm/dev-ubuntu-24.04:7.2.4`). Neither base ships
+  / rocm: `rocm/dev-ubuntu-24.04:7.14.1-full`). Neither base ships
   Python or PyTorch.
 - Install `uv` from a side-image, then have `uv` provision a
   Python interpreter into a venv at `/opt/comfyui/python/venv`.
-- Install torch (cu130 / +rocm7.2 wheels) and ComfyUI into that
+- Install torch (cu130 / +rocm7.14 wheels) and ComfyUI into that
   venv at build time.
 - The venv path lives **inside the bind mount**
   (`./data/python:/opt/comfyui/python`), so user `pip install`s
@@ -183,5 +195,135 @@ behaviour.
   releases, not AMD's `rocm/comfyui` fork or any other fork.
 - Windows / macOS hosts. Image is Linux-only.
 - Building torch from source. We use PyTorch's official
-  [download.pytorch.org/whl/rocm7.2](https://download.pytorch.org/whl/rocm7.2/)
+  [download.pytorch.org/whl/rocm7.14](https://download.pytorch.org/whl/rocm7.14/)
   wheels. Building torch is out of scope.
+
+## GPU architecture policy: gfx1201 + gfx1100 only
+
+This image supports exactly two AMD GPU architectures:
+
+- `gfx1201` — RDNA 4 (R9700, AI PRO R9700, RX 9070 XT, RX 9070)
+- `gfx1100` — RDNA 3 (RX 7900 XTX, RX 7900 XT, PRO W7900)
+
+This is enforced, not just documented:
+
+1. The build prunes every per-architecture kernel for other targets
+   out of the ROCm base **and out of the torch wheel's bundled ROCm**
+   (see "The wheel ships its own ROCm" below — the wheel's copy is
+   what torch actually loads). The prune is a **generic sweep**, not
+   a hand-written path list: every file or directory whose name
+   contains a gfx arch token other than `gfx1100` / `gfx1201` is
+   deleted. That covers hipBLASLt `library/gfx*`, rocBLAS Tensile
+   kernels and per-arch dirs, hipSPARSELt, MIOpen's
+   `libMIOpenCKGroupedConv_gfx*.so` (350 MB each), rocSHMEM device
+   bitcode, MIOpen's kernel db, and the `.kpack` library blobs — a
+   path list kept missing new ones.
+   Measured: `/opt/rocm` goes from **19 GB / 47 gfx targets** in the
+   base to **5.4 GB / 2 gfx targets** in the built image, and the
+   wheel's `_rocm_sdk_libraries` from **12 GB** to **3 GB**.
+2. `entrypoint.sh` detects the host GPU's gfx code via `rocminfo` at
+   start-up and exits with an explicit error on anything else.
+   Override with `GFX_ALLOWLIST=""`.
+3. The build **asserts** that the prune actually took effect (it
+   fails the build if any disallowed gfx token survives), so a
+   silently-missed prune step cannot ship.
+
+Consequences for development:
+
+- The local test box's iGPU (Radeon 680M, gfx1035 — RDNA 2) is **not**
+  a supported target, so end-to-end GPU testing of this build is not
+  possible locally. The build-time checks (torch import, arch list,
+  torchaudio import) still run on any host.
+- Adding a third architecture means re-adding its tokens to the
+  allowlist in the `Dockerfile` prune and to `GFX_ALLOWLIST` in
+  `entrypoint.sh`.
+
+Three ROCm-7.14-specific traps, all handled in the Dockerfile:
+
+- The 7.14 base (TheRock layout) ships **no**
+  `/etc/ld.so.conf.d/rocm*.conf`, so `LD_LIBRARY_PATH` must be set
+  explicitly or `import torch` fails with
+  "libamdhip64.so: cannot open shared object file".
+- `/opt/rocm/lib/llvm` must **not** be deleted: `libMIOpen.so` and
+  `libhipblaslt.so` link against `libLLVM.so` / `libclang-cpp.so`
+  there. Only the LLVM headers/docs are pruned.
+- **`find` does not follow a symlink given as the starting point.**
+  In the TheRock layout `/opt/rocm/lib`, `/opt/rocm/bin` and
+  `/opt/rocm/llvm` are symlinks into `/opt/rocm/core-7.14/` via
+  `/etc/alternatives/`. So `find /opt/rocm/lib -maxdepth 1 -name
+  '*.so'` matches **nothing**, exits 0, and looks like a successful
+  prune while every file is still there. Always pass `-H`, and sweep
+  from `/opt/rocm` (a real directory). An earlier revision of this
+  Dockerfile shipped with exactly that bug: the image still carried
+  4.4 GB of CDNA MIOpen kernels and every RDNA 3.5 iGPU kernel.
+
+### Pruning needs a flattening stage to shrink the pull
+
+Docker layers are additive: a file deleted in a later layer is
+recorded as a whiteout, but its bytes stay in the layer that created
+it. So the prune on its own shrinks the **running container's**
+filesystem (`/opt/rocm`: 19 GB -> 5.4 GB) but does **not** reduce
+the image's pull size — the 19 GB ROCm base layer is still
+downloaded whole.
+
+The `Dockerfile` therefore has three stages:
+
+1. `uv` — a tiny side-image carrying the `uv` binary.
+2. `build` — the ROCm base, ComfyUI, the venv, and the gfx prune.
+3. `runtime` — plain `ubuntu:24.04` (78 MB) plus
+   `COPY --from=build / /`, which re-materialises the **already
+   pruned** tree into a fresh layer. The un-pruned base layers are
+   never referenced by the published image, so they are never pulled.
+
+Measured effect:
+
+| | before | after |
+|---|---|---|
+| pull size (compressed) | 18.4 GB | **5.6 GB** |
+| disk usage | 60.2 GB | **21.2 GB** |
+| runtime filesystem | 25 GB | **15 GB** |
+
+Consequences for development:
+
+- The bake target pins `target = "runtime"`. Adding a stage to the
+  Dockerfile means checking that the last stage is still the one we
+  publish — `docker buildx bake --print` shows the resolved target.
+- `COPY --from=build / /` does not carry over the base image's
+  `ENV`, `WORKDIR`, `ENTRYPOINT` or `CMD`; the runtime stage
+  re-declares them. Forgetting one is the likely failure mode here
+  (a missing `PATH` or `LD_LIBRARY_PATH` breaks `import torch`).
+- The base image's `USER`, `WORKDIR` and any `ENTRYPOINT` from
+  `rocm/dev-ubuntu-24.04` are likewise not inherited. `COPY` does
+  preserve file ownership, so the `comfyui` user and the `video`
+  group survive.
+
+### The wheel ships its own ROCm — prune it too
+
+The torch ROCm wheel bundles a complete ROCm runtime of its own:
+
+- `site-packages/_rocm_sdk_libraries` — 12 GB, the ROCm **runtime**
+  (libamdhip64, libMIOpen, hipBLASLt, rocBLAS, RCCL, ...)
+- `site-packages/_rocm_sdk_core` — 1.4 GB, the compiler and headers
+
+`libtorch_hip.so` has `RPATH=$ORIGIN/../../_rocm_sdk_libraries/lib`,
+so **the wheel's copy is what torch actually loads** — not the base
+image's `/opt/rocm`. Pruning only `/opt/rocm` would leave every
+unsupported target's kernels live in the runtime that matters. The
+sweep therefore covers all three roots (`/opt/rocm`, `_rocm_sdk_core`,
+`_rocm_sdk_libraries`), and the build asserts that all three contain
+only gfx1100/gfx1201 afterwards.
+
+Two ROCm specifics the tokeniser has to handle:
+
+- An arch code is not always 4 digits: `gfx90a` / `gfx90c` are 2
+  digits + a letter, `gfx115x` is 3 digits + a letter.
+- MIOpen's db has config files whose code carries a mixed
+  digit/letter suffix: `gfx90878.HIP.fdb.txt`, `gfx90a68.db.txt`,
+  `gfx90a6e.db.txt`. The token pattern takes the maximal digit run
+  and then everything alphanumeric after it.
+
+And the path match must be on **token boundaries**: the base image
+contains a profiler directory literally named `gfx11`, and a naive
+substring match would find `gfx11` inside `gfx1100` and delete the
+kernel we need. The build also asserts the opposite failure mode —
+that the sweep did NOT delete the gfx1100/gfx1201 kernels.
