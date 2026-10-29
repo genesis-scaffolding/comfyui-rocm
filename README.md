@@ -119,7 +119,7 @@ ghcr.io/genesis-scaffolding/comfyui-rocm:<upstream-version>-rocm-<short>-<arch>
 ```
 
 Examples:
-- `ghcr.io/genesis-scaffolding/comfyui-rocm:v0.34.0-rocm-7.14-amd64`
+- `ghcr.io/genesis-scaffolding/comfyui-rocm:v0.43.0-rocm-7.14-amd64`
 - `ghcr.io/genesis-scaffolding/comfyui-rocm:latest-rocm-7.14-amd64` — rolling latest, amd64 only
 
 ## Build process

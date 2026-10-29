@@ -12,7 +12,7 @@
 services:
   comfyui:
     hostname: comfyui
-    image: "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.34.0-rocm-7.14-amd64"
+    image: "ghcr.io/genesis-scaffolding/comfyui-rocm:v0.43.0-rocm-7.14-amd64"
     restart: "unless-stopped"
     # ROCm device access. Replaces the NVIDIA-specific `runtime: nvidia`
     # and `gpus:` blocks used by the cuda repo:

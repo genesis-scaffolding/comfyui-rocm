@@ -184,6 +184,12 @@ jobs:
         # newer builds. Anchor each tag to a fresh empty commit whose
         # committer date is build time so created_at advances and new
         # releases sort to the top. Main is never pushed.
+        #
+        # The tag is force-moved: a rebuild of the SAME upstream version
+        # (workflow_dispatch with force_build=true) would otherwise fail
+        # with "tag already exists". Moving the tag to the new empty
+        # commit is exactly what the trick wants — the release's
+        # created_at advances, so the rebuilt release sorts to the top.
         run: |
           set -euo pipefail
           TAG="${{ needs.check-release.outputs.release_tag }}"
@@ -191,8 +197,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit --allow-empty \
             -m "ComfyUI ${TAG} (ROCm build $(date -u +%Y-%m-%dT%H:%M:%SZ))"
-          git tag "${TAG}"
-          git push origin "refs/tags/${TAG}"
+          git tag -f "${TAG}"
+          git push --force origin "refs/tags/${TAG}"
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
