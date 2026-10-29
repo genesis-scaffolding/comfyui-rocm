@@ -40,6 +40,25 @@ torchvision==0.29.1+rocm7.14
 # CUDA build.
 torchaudio==2.11.1+rocm7.14
 
+# ROCm device packages — only for the two architectures we support.
+#
+# torch pulls in `rocm[device-all,libraries]`, and `device-all`
+# expands to a device package for EVERY architecture AMD publishes
+# (25 packages, ~7 GB). overrides.txt replaces that requirement with
+# the `libraries` extra only, so the device packages have to be
+# requested here — and we request exactly the two we support:
+#
+#     rocm-sdk-device-gfx1100   RDNA 3  (RX 7900 XTX/XT/GRE, PRO W7900)
+#     rocm-sdk-device-gfx1201   RDNA 4  (RX 9070 XT/9070, R9700)
+#
+# Do NOT add other architectures here: the image prunes every
+# per-arch kernel except these two, and the entrypoint refuses to
+# start on anything else.
+#
+# https://repo.amd.com/rocm/whl-multi-arch/
+rocm-sdk-device-gfx1100==7.14.1
+rocm-sdk-device-gfx1201==7.14.1
+
 # Note: xformers is intentionally omitted. PyTorch's ROCm wheels do
 # not bundle xformers, and ComfyUI falls back to SDPA attention,
 # which is competitive on modern hardware. If a user specifically

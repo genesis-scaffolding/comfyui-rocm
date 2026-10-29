@@ -80,6 +80,21 @@ ENV COMFYUI_HOME="/opt/comfyui"
 ENV PATH="/opt/rocm/bin:/opt/rocm/llvm/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
 
+# Pin the ROCm meta-package's target family.
+#
+# AMD's `rocm` package is distributed as an sdist and is rebuilt from
+# source on the target machine, where it inspects the local GPU to
+# decide which architecture family it targets. The build host has no
+# GPU (so it falls back to the default family) while a user's
+# machine does, so the same requirements.in would resolve to
+# different metadata on the two. Pinning it makes the build and the
+# runtime resolution identical.
+#
+# The `device` extra is overridden away in overrides.txt, so this
+# value does not decide which per-arch packages get installed — see
+# requirements.in for the two that do.
+ENV ROCM_SDK_TARGET_FAMILY=gfx1100
+
 # OS-level packages needed by ComfyUI runtime + a few utilities used
 # by the entrypoint and Manager. Same list as the cuda image.
 #
@@ -123,6 +138,7 @@ WORKDIR ${COMFYUI_HOME}
 # changes to ComfyUI itself (cloned below) don't invalidate these
 # cached layers.
 COPY --chown=comfyui:comfyui ./requirements.in ./
+COPY --chown=comfyui:comfyui ./overrides.txt ./
 COPY --chown=comfyui:comfyui --chmod=0755 ./entrypoint.sh ./
 COPY --chown=comfyui:comfyui --chmod=0644 ./extensions.sh ./
 COPY --chown=comfyui:comfyui ./patches ./patches
@@ -158,6 +174,7 @@ RUN set -ex \
         && uv python install '${PYTHON_VERSION}' \
         && uv venv --python '${PYTHON_VERSION}' --allow-existing \"\${VIRTUAL_ENV}\" \
         && uv pip install --compile-bytecode -r requirements.in \
+             --overrides overrides.txt \
         && uv cache clean \
     "
 
@@ -302,6 +319,12 @@ RUN set -ex \
     #                                   kernels live in the runtime
     #                                   that matters.
     #
+    #    site-packages itself is a root too, because the per-arch
+    #    ROCm device packages install their dist-info directories
+    #    directly into it (rocm_sdk_device_gfx1012-7.14.1.dist-info
+    #    and friends). Leaving those behind would claim packages are
+    #    installed whose payload the sweep just deleted.
+    #
     #    Tokenising matters, twice over:
     #
     #    1. A gfx arch code is NOT always 4 digits: gfx90a / gfx90c are
@@ -322,6 +345,7 @@ RUN set -ex \
     #    engine is not leftmost-longest for consecutive optionals and
     #    happily turns "gfx1100" into the token "gfx110".
     && gfx_roots="/opt/rocm \
+                  /opt/comfyui/python/venv/lib/python3.13/site-packages \
                   /opt/comfyui/python/venv/lib/python3.13/site-packages/_rocm_sdk_core \
                   /opt/comfyui/python/venv/lib/python3.13/site-packages/_rocm_sdk_libraries" \
     && gfx_tokens="$(for r in ${gfx_roots}; do \
@@ -400,6 +424,7 @@ COPY --from=build / /
 ENV COMFYUI_HOME="/opt/comfyui"
 ENV PATH="/opt/rocm/bin:/opt/rocm/llvm/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_SDK_TARGET_FAMILY=gfx1100
 
 WORKDIR ${COMFYUI_HOME}
 

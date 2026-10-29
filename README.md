@@ -86,6 +86,10 @@ start on an unsupported GPU with a clear message. Set
 - Base: `rocm/dev-ubuntu-24.04:7.14.1-full` (Ubuntu 24.04 + ROCm 7.14.1 runtime, TheRock layout)
 - Python 3.13 in `/opt/comfyui/python/venv` (installed at build time via `uv`, with the venv inside the bind mount so `pip install`s persist)
 - PyTorch 2.14.1 with ROCm 7.14 wheels from [download.pytorch.org](https://download.pytorch.org/whl/rocm7.14/) (kernels for gfx1201 and gfx1100)
+- ROCm device packages for **gfx1201 and gfx1100 only**. AMD ships one
+  distribution per architecture and torch asks for all 25 of them
+  (`rocm[device-all]`); the image overrides that down to the two it
+  supports, which saves ~5.9 GB of download per rebuild.
 - ComfyUI at the upstream tagged release
 - [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) (pre-installed as a custom node + the `comfyui_manager` PyPI backend package)
 - `--disable-pinned-memory` baked into the ComfyUI defaults (saves ~15 GB of system RAM staging buffer; on a 32 GB system + 32 GB VRAM R9700, the default pinned buffer would OOM)
@@ -111,6 +115,24 @@ things keep it there:
 
 Without the prune and the flattening the same image is 18.4 GB
 compressed / 60.2 GB on disk.
+
+### The bind-mounted venv
+
+`compose.yaml` bind-mounts `./data/python` to `/opt/comfyui/python`,
+which is where the venv lives (`/opt/comfyui/python/venv`). That is
+deliberate: `pip install`s you run inside the container survive
+`docker compose up --force-recreate`.
+
+The flip side is that the venv baked into the image is *shadowed* by
+the mount, so a fresh (or stale) host directory means the entrypoint
+rebuilds the venv on first start. It downloads ~3.4 GB and produces
+an ~8.5 GB venv. Point `UV_CACHE_DIR` at the same mount if you want
+the download cache to persist too — the entrypoint already does this
+(`/opt/comfyui/python/cache`).
+
+Upgrading from an older image invalidates the old venv (torch and the
+ROCm runtime change together), so the first start after an upgrade
+rebuilds it. Delete `./data/python` if a rebuild misbehaves.
 
 ## Image naming
 

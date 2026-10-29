@@ -309,9 +309,58 @@ The torch ROCm wheel bundles a complete ROCm runtime of its own:
 so **the wheel's copy is what torch actually loads** — not the base
 image's `/opt/rocm`. Pruning only `/opt/rocm` would leave every
 unsupported target's kernels live in the runtime that matters. The
-sweep therefore covers all three roots (`/opt/rocm`, `_rocm_sdk_core`,
-`_rocm_sdk_libraries`), and the build asserts that all three contain
-only gfx1100/gfx1201 afterwards.
+sweep therefore covers all four roots (`/opt/rocm`, site-packages,
+`_rocm_sdk_core`, `_rocm_sdk_libraries`), and the build asserts that
+all of them contain only gfx1100/gfx1201 afterwards.
+
+site-packages is a root because the per-arch ROCm device packages
+install their `dist-info` directories directly into it
+(`rocm_sdk_device_gfx1012-7.14.1.dist-info` and friends). Leaving
+those behind would claim packages are installed whose payload the
+sweep just deleted — uv would see a half-installed environment.
+
+### The `device-all` extra pulls every architecture
+
+AMD ships the ROCm 7.14 runtime as one distribution **per
+architecture** (`rocm-sdk-device-gfx1010` ... `gfx1201`, 25 of them).
+The torch wheel declares:
+
+```
+Requires-Dist: rocm[device-all,libraries]==7.14.*
+```
+
+`device-all` expands to the device package for **every** supported
+architecture — 25 packages, ~5.9 GB of downloads, 23 of them for
+architectures this image can never run.
+
+`overrides.txt` replaces that requirement with the `libraries` extra
+only, and `requirements.in` then requests the two device packages we
+actually need:
+
+```
+rocm-sdk-device-gfx1100==7.14.1
+rocm-sdk-device-gfx1201==7.14.1
+```
+
+Measured effect on a fresh (bind-mounted) venv:
+
+| | before | after |
+|---|---|---|
+| device packages downloaded | 25 (~5.9 GB) | 2 (~530 MB) |
+| total download | ~8.1 GB | **~3.4 GB** |
+| venv size on disk | ~18 GB | **~8.5 GB** |
+| packages installed | 139 | 117 |
+
+The override is applied in **both** places `uv pip install` runs —
+the Dockerfile's build-time install and the entrypoint's runtime
+refresh — otherwise the first container start on a machine whose
+bind-mounted venv needs rebuilding would still pull the lot.
+
+AMD's `rocm` package is an sdist that is rebuilt on the target
+machine and inspects the local GPU to pick its target family. The
+build host has no GPU and falls back to the default family while a
+user's machine does not, so `ROCM_SDK_TARGET_FAMILY` is pinned in
+the image to keep the two resolutions identical.
 
 Two ROCm specifics the tokeniser has to handle:
 

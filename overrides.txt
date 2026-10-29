@@ -1,0 +1,44 @@
+# uv dependency overrides.
+#
+# WHY THIS FILE EXISTS
+#
+# torch 2.14.1+rocm7.14 declares:
+#
+#     Requires-Dist: rocm[device-all,libraries]==7.14.*
+#
+# The `device-all` extra of AMD's `rocm` meta-package expands to the
+# device package for EVERY supported architecture:
+#
+#     rocm-sdk-device-gfx1010, gfx1011, gfx1012, gfx1030 ... gfx1100,
+#     gfx1101 ... gfx1150, gfx1151 ... gfx1200, gfx1201, gfx1250,
+#     gfx90a, gfx908, gfx942, gfx950 ...
+#
+# That is 25 packages and roughly 7 GB of downloads — 23 of them for
+# architectures this image does not support and will never run on.
+#
+# This override REPLACES torch's requirement with the `libraries`
+# extra only, which drops `device-all` entirely. The two device
+# packages we actually need are then requested explicitly in
+# requirements.in:
+#
+#     rocm-sdk-device-gfx1100==7.14.1
+#     rocm-sdk-device-gfx1201==7.14.1
+#
+# Net effect: 25 device packages -> 2. Saves ~6.5 GB of download at
+# image build time and again on every container start where the
+# bind-mounted venv has to be (re)built.
+#
+# The `rocm` meta-package is distributed as an sdist and is rebuilt
+# from source on the target machine, where it inspects the local GPU
+# to decide its target family. That makes the built metadata differ
+# between the build host (no GPU -> falls back to the default family)
+# and a user's machine (real GPU). We pin ROCM_SDK_TARGET_FAMILY in
+# the Dockerfile and the entrypoint so both resolve identically.
+#
+# The override matches on the package name and replaces the whole
+# requirement, extras included.
+#
+# Keep the version in sync with ROCM_VERSION in metadata.env: the
+# `rocm` meta-package version tracks the ROCm release (7.14.x).
+
+rocm[libraries]==7.14.*

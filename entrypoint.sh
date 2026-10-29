@@ -270,9 +270,17 @@ function _main() {
     fi
 
     # Make sure the venv is current with requirements.in
+    #
+    # --overrides drops the `device-all` extra from torch's
+    # `rocm[device-all,libraries]` requirement. Without it, every
+    # container start on a machine whose bind-mounted venv needs
+    # (re)building downloads ~7 GB of device packages for all 25
+    # architectures, 23 of which this image cannot run. See
+    # overrides.txt.
     log "Refreshing Python environment..."
     uv venv --allow-existing "${VIRTUAL_ENV}"
-    uv pip install --compile-bytecode -r "${COMFYUI_HOME}/requirements.in"
+    uv pip install --compile-bytecode -r "${COMFYUI_HOME}/requirements.in" \
+        --overrides "${COMFYUI_HOME}/overrides.txt"
     uv cache prune
 
     init_manager
