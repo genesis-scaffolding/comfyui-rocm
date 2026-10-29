@@ -172,19 +172,33 @@ function fix_perms() {
     exec gosu comfyui "$0" "$@"
 }
 
-# Detect the gfx code(s) of the GPUs exposed to this container via
-# KFD. The kernel driver publishes them as
+# Detect the GPU agents visible to this container as "<index> <gfx>"
+# pairs. <index> is the ROCr/HIP device index — GPU agents only,
+# counted from 0 in the order ROCr enumerates them. That is the
+# index ROCR_VISIBLE_DEVICES / HIP_VISIBLE_DEVICES use.
+#
+# The kernel driver publishes the targets as
 #   /sys/class/kfd/kfd/topology/nodes/<node>/properties
 # with a line like `gfx_target_version : 0x1201`.
-function detect_gfx_archs() {
+function detect_gfx_agents() {
     local out
 
     # Preferred: rocminfo reports the gfx code of every GPU agent.
+    # "Agent N" blocks are counted, but only the ones that carry a
+    # "Name: gfx..." line are GPU agents — the CPU agent does not.
+    # rocminfo honours ROCR_VISIBLE_DEVICES, so a host that has
+    # already pinned a device only reports that one.
     if command -v rocminfo >/dev/null 2>&1; then
         out="$(rocminfo 2>/dev/null \
-            | awk -F: '/^[[:space:]]*Name:[[:space:]]*gfx/ {
-                        gsub(/[[:space:]]/, "", $2); print $2 }' \
-            | sort -u)" || true
+            | awk '
+                /^Agent [0-9]+/ { gpu = 0; next }
+                /^[[:space:]]*Name:[[:space:]]*gfx/ {
+                    if (gpu) next
+                    code = $2
+                    gsub(/[[:space:]]/, "", code)
+                    printf "%d %s\n", n++, code
+                    gpu = 1
+                }')" || true
         if [[ -n "${out}" ]]; then
             echo "${out}"
             return 0
@@ -193,36 +207,69 @@ function detect_gfx_archs() {
 
     # Fallback: KFD topology. gfx_target_version holds the ASIC
     # marketing-name id (e.g. 100305), NOT the gfx code, so only
-    # accept values that already look like a gfx code.
+    # accept values that already look like a gfx code. No device
+    # index is available from this source.
     out="$(grep -h 'gfx_target_version' \
                 /sys/class/kfd/kfd/topology/nodes/*/properties 2>/dev/null \
             | tr -s ' ' '\n' \
             | grep -E '^gfx[0-9]{4}$' \
-            | sort -u)" || true
+            | sort -u \
+            | sed 's/^/- /')" || true
     [[ -n "${out}" ]] && echo "${out}"
     return 0
 }
 
-# Refuse to start on a GPU architecture this image does not support.
+# Check the detected GPUs against the allowlist.
+#
+# A machine can have a supported GPU alongside an unsupported one —
+# the common case is a discrete gfx1201/gfx1100 card plus an APU
+# iGPU (gfx115x, gfx103x). Refusing to start because of the iGPU
+# would make the image unusable on exactly those boxes, so the rule
+# is: refuse only when NO supported GPU is present.
+#
+# When unsupported GPUs are present alongside a supported one we warn
+# instead: their per-arch kernels were pruned from the image, so the
+# runtime would fail if it initialised on one of them.
 function check_gfx_arch() {
     [[ -n "${GFX_ALLOWLIST}" ]] || return 0
 
-    local archs arch
-    archs="$(detect_gfx_archs)"
-    [[ -n "${archs}" ]] || return 0
+    local agents supported unsupported idx arch pin
+    agents="$(detect_gfx_agents)"
+    [[ -n "${agents}" ]] || return 0
 
-    for arch in ${archs}; do
-        if ! grep -qw -- "${arch}" <<< "${GFX_ALLOWLIST}"; then
-            log "ERROR: unsupported GPU architecture '${arch}'."
-            log "This image supports only: ${GFX_ALLOWLIST}"
-            log "  gfx1201 — RDNA 4 (RX 9070 XT, RX 9070, R9700)"
-            log "  gfx1100 — RDNA 3 (RX 7900 XTX, RX 7900 XT, PRO W7900)"
-            log "Set GFX_ALLOWLIST='' to bypass this check."
-            exit 1
+    supported=""
+    unsupported=""
+    while read -r idx arch; do
+        [[ -n "${arch}" ]] || continue
+        if grep -qw -- "${arch}" <<< "${GFX_ALLOWLIST}"; then
+            supported="${supported}${supported:+,}${idx}:${arch}"
+        else
+            unsupported="${unsupported}${unsupported:+,}${idx}:${arch}"
         fi
-    done
+    done <<< "${agents}"
 
-    log "GPU architecture: ${archs}"
+    if [[ -z "${supported}" ]]; then
+        log "ERROR: no supported GPU architecture found."
+        log "Detected: ${unsupported:-none}"
+        log "This image supports only: ${GFX_ALLOWLIST}"
+        log "  gfx1201 — RDNA 4 (RX 9070 XT, RX 9070, R9700)"
+        log "  gfx1100 — RDNA 3 (RX 7900 XTX, RX 7900 XT, PRO W7900)"
+        log "Set GFX_ALLOWLIST='' to bypass this check."
+        exit 1
+    fi
+
+    if [[ -n "${unsupported}" ]]; then
+        log "WARNING: unsupported GPU(s) also present: ${unsupported}"
+        log "  Their per-arch kernels are not in this image, so the runtime"
+        log "  cannot use them. Supported GPU(s): ${supported}"
+        pin="${supported%%:*}"
+        if [[ "${pin}" != "-" ]]; then
+            log "  If the runtime does not pick it automatically, pin it with:"
+            log "    ROCR_VISIBLE_DEVICES=${pin}"
+        fi
+    fi
+
+    log "GPU architecture: ${supported}"
 }
 
 # Initialise ComfyUI-Manager's profile if Manager is installed.

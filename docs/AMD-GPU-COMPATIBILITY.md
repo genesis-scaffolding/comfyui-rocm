@@ -55,15 +55,52 @@ The gfx code is what determines ROCm compatibility. For example:
 
 Everything else is pruned from the image. The entrypoint checks the
 host GPU's gfx code (`rocminfo`) at start-up and exits with an
-explicit error if it is not `gfx1201` or `gfx1100`:
+explicit error if **no** supported GPU is present:
 
 ```
-** ERROR: unsupported GPU architecture 'gfx1152'.
+** ERROR: no supported GPU architecture found.
+** Detected: 0:gfx1152
 ** This image supports only: gfx1201 gfx1100
 ```
 
 Bypass the check with `GFX_ALLOWLIST=""` (only useful for
 debugging — the kernels for other targets are not in the image).
+
+## Multi-GPU and hybrid APU + dGPU machines
+
+A host with a discrete supported card *and* an unsupported iGPU is
+**not** blocked. The entrypoint refuses only when no supported GPU
+is present; otherwise it warns and continues:
+
+```
+** WARNING: unsupported GPU(s) also present: 1:gfx1151
+**   Their per-arch kernels are not in this image, so the runtime
+**   cannot use them. Supported GPU(s): 0:gfx1201
+**   If the runtime does not pick it automatically, pin it with:
+**     ROCR_VISIBLE_DEVICES=0
+```
+
+The indices in that message are ROCr/HIP device indices — GPU
+agents only, counted from 0 in the order ROCr enumerates them.
+
+Two variables matter here, and they work at different levels:
+
+- `ROCR_VISIBLE_DEVICES` filters at the ROCr layer, so it also
+  changes what `rocminfo` reports. Use it when the container must
+  only ever see one GPU.
+- `HIP_VISIBLE_DEVICES` filters at the HIP layer and does **not**
+  affect `rocminfo`.
+
+If the runtime initialises on the iGPU (whose kernels were pruned),
+HIP fails with `No CUDA GPUs are available`. Pin the dGPU with
+`ROCR_VISIBLE_DEVICES=<index>` (or `HIP_VISIBLE_DEVICES=<index>`) to
+avoid it.
+
+> Do **not** use `HSA_OVERRIDE_GFX_VERSION` to paper over an
+> unsupported GPU. It overrides the gfx code reported by the kernel
+> driver, so the runtime tries to load code for an ISA the hardware
+> does not implement — on a mixed system that breaks ROCm entirely
+> with `HSA_STATUS_ERROR_OUT_OF_RESOURCES` from `rocminfo`.
 
 Pruned in the image build:
 

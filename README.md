@@ -77,9 +77,25 @@ This image ships GPU kernels for exactly two architectures:
 Everything else (RDNA 2, RDNA 3 lower tier, RDNA 3.5 iGPUs, CDNA
 datacenter parts) is **not supported**: the per-architecture kernels
 are physically pruned from the image, and the entrypoint refuses to
-start on an unsupported GPU with a clear message. Set
-`GFX_ALLOWLIST=""` to bypass the check. See
+start when **no** supported GPU is present. Set `GFX_ALLOWLIST=""`
+to bypass the check. See
 [AMD GPU compatibility](docs/AMD-GPU-COMPATIBILITY.md).
+
+**Hybrid APU + dGPU machines** (a discrete R9700/RX 7900 alongside
+an APU iGPU) start normally — the iGPU is reported as a warning,
+not an error. If the ROCm runtime then initialises on the iGPU
+instead of the card, pin it:
+
+```yaml
+environment:
+  ROCR_VISIBLE_DEVICES: "0"   # ROCr device index of the dGPU
+```
+
+`ROCR_VISIBLE_DEVICES` filters at the ROCr layer (and is what
+`rocminfo` reports); `HIP_VISIBLE_DEVICES` filters later, at the
+HIP layer. Do not use `HSA_OVERRIDE_GFX_VERSION` for this — it
+overrides the gfx code the kernel driver reports and breaks ROCm on
+a mixed system.
 
 ### Image contents
 

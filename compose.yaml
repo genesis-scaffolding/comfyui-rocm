@@ -34,6 +34,16 @@ services:
       # COMFYUI_NO_DEFAULTS: "true" disables the entrypoint's default flags
       # ROCm-specific env:
       HIP_VISIBLE_DEVICES: "0"
+      # On a hybrid APU + dGPU machine (e.g. R9700 + Ryzen iGPU) the
+      # iGPU is an unsupported target whose kernels were pruned, so
+      # the runtime must not initialise on it. Set ROCR_VISIBLE_DEVICES
+      # to the ROCr device index of the dGPU if that happens — it
+      # filters at the ROCr layer, which is also what rocminfo
+      # reports, so the entrypoint's gfx check sees only that GPU.
+      # ROCR_VISIBLE_DEVICES: "0"
+      # Do NOT use HSA_OVERRIDE_GFX_VERSION for this: it overrides the
+      # gfx code the kernel driver reports and breaks ROCm entirely on
+      # a mixed system.
       # torch.cuda.is_available() is the canonical check on ROCm too,
       # but disambiguate from any host CUDA setup
       CUDA_VISIBLE_DEVICES: ""

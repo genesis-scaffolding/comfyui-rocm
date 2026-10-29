@@ -221,9 +221,14 @@ This is enforced, not just documented:
    Measured: `/opt/rocm` goes from **19 GB / 47 gfx targets** in the
    base to **5.4 GB / 2 gfx targets** in the built image, and the
    wheel's `_rocm_sdk_libraries` from **12 GB** to **3 GB**.
-2. `entrypoint.sh` detects the host GPU's gfx code via `rocminfo` at
-   start-up and exits with an explicit error on anything else.
-   Override with `GFX_ALLOWLIST=""`.
+2. `entrypoint.sh` detects the host GPUs' gfx codes via `rocminfo` at
+   start-up. It exits with an explicit error only when **no**
+   supported GPU is present. A machine that has a supported GPU
+   *alongside* an unsupported one (the usual case: a discrete
+   gfx1201/gfx1100 card plus an APU iGPU) starts normally with a
+   warning, because refusing there would make the image unusable on
+   exactly those boxes. Override the check entirely with
+   `GFX_ALLOWLIST=""`.
 3. The build **asserts** that the prune actually took effect (it
    fails the build if any disallowed gfx token survives), so a
    silently-missed prune step cannot ship.
